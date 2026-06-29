@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#111111">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="購入評議会">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>コレクター購入評議会</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Collector Purchase Council</p>
+      <h1>コレクター購入評議会</h1>
+    </div>
+    <p class="header-copy">欲しい物を、買う・待つ・見送るの評議にかけるローカルアプリ。</p>
+  </header>
+
+  <main class="page-shell">
+    <nav class="tab-nav" aria-label="画面切り替え">
+      <button type="button" class="tab-button" data-tab="cover">表紙</button>
+      <button type="button" class="tab-button" data-tab="form">商品追加・編集</button>
+      <button type="button" class="tab-button" data-tab="considering">検討中・保留中</button>
+      <button type="button" class="tab-button" data-tab="purchased">購入済み</button>
+      <button type="button" class="tab-button" data-tab="skipped">見送り済み</button>
+      <button type="button" class="tab-button" data-tab="settings">設定</button>
+    </nav>
+
+    <section class="tab-panel" data-tab-panel="cover">
+      <section class="summary-grid" aria-label="現在の状況">
+        <article class="summary-card">
+          <span>当期間予算</span>
+          <strong id="monthlyBudgetText">0円</strong>
+        </article>
+        <article class="summary-card">
+          <span>期間内使用額</span>
+          <strong id="monthlySpentText">0円</strong>
+        </article>
+        <article class="summary-card">
+          <span>残り予算</span>
+          <strong id="remainingBudgetText">0円</strong>
+        </article>
+        <article class="summary-card heart-card">
+          <span>心のヘソクリ</span>
+          <strong id="heartStockText">0円</strong>
+          <small>これは実在する現金ではありません。ただし、コレクター心理上はかなり現金に近い効力を持ちます。</small>
+        </article>
+      </section>
+
+      <section class="count-strip budget-period-strip" aria-label="予算期間">
+        <div><span>予算期間</span><strong id="budgetPeriodText">-</strong></div>
+      </section>
+
+      <section class="count-strip status-count-strip" aria-label="商品状態別件数">
+        <div><span>登録</span><strong id="itemCountText">0</strong></div>
+        <div><span>検討中・保留中</span><strong id="consideringCountText">0</strong></div>
+        <div><span>購入済み</span><strong id="purchasedCountText">0</strong></div>
+        <div><span>見送り済み</span><strong id="skippedStatusCountText">0</strong></div>
+      </section>
+
+      <section class="count-strip status-count-strip" aria-label="購入前審議結果別件数">
+        <div><span>未審議</span><strong id="unreviewedCountText">0件</strong></div>
+        <div><span>保留中</span><strong id="holdJudgmentCountText">0件</strong></div>
+        <div><span>見送り判定</span><strong id="skipJudgmentCountText">0件</strong></div>
+      </section>
+
+      <section class="panel collector-balance-panel" aria-label="コレクター傾向">
+        <div class="section-title">
+          <h2>コレクター傾向</h2>
+          <p>購入後履歴からライトサイド / ダークサイドの傾向を集計します。</p>
+        </div>
+        <div class="collector-balance-grid">
+          <div><span>ライトサイド</span><strong id="collectorLightTotalText">0</strong></div>
+          <div><span>ダークサイド</span><strong id="collectorDarkTotalText">0</strong></div>
+          <div><span>観測済み購入履歴</span><strong id="collectorObservedPurchaseCountText">0件</strong></div>
+        </div>
+        <div class="collector-balance-title">
+          <span>現在の称号</span>
+          <strong id="collectorBalanceTitleText">未観測の収集者</strong>
+        </div>
+        <p id="collectorBalanceDescriptionText" class="collector-balance-description">まだ購入後判決の記録がありません。最初の購入後評議会から、コレクター傾向の観測が始まります。</p>
+      </section>
+
+      <section class="panel recent-history-panel">
+        <div class="section-title">
+          <h2>最近の審議履歴</h2>
+          <p>直近の購入前審議と購入後評議会を確認できます。</p>
+        </div>
+        <div id="recentHistoryList" class="recent-history-list"></div>
+        <p id="recentHistoryEmpty" class="empty-state">まだ審議履歴がありません。</p>
+      </section>
+    </section>
+
+    <section class="tab-panel hidden" data-tab-panel="settings">
+    <section class="panel settings-panel">
+      <div class="section-title">
+        <h2>設定</h2>
+        <p>予算と、標準で使う評議会モードを保存します。</p>
+      </div>
+      <form id="settingsForm" class="form-grid">
+        <label>
+          <span>予算期間開始日</span>
+          <input id="budgetStartDateInput" type="date">
+        </label>
+        <label>
+          <span>予算期間終了日</span>
+          <input id="budgetEndDateInput" type="date">
+        </label>
+        <label>
+          <span>当期間趣味予算</span>
+          <input id="monthlyBudgetInput" type="number" min="0" step="1" inputmode="numeric">
+        </label>
+        <label>
+          <span>デフォルト評議会モード</span>
+          <select id="defaultCouncilModeInput"></select>
+        </label>
+        <button type="submit" class="primary-button">設定を保存</button>
+      </form>
+      <div class="settings-tools">
+        <p>心のヘソクリは精神的資産であり、現実の予算ではありません。手動編集しても家計簿上のお金は増えません。</p>
+        <div class="form-actions">
+          <button type="button" id="editHeartStockButton" class="secondary-button">心のヘソクリを手動編集</button>
+          <button type="button" id="resetHeartStockButton" class="danger-button">心のヘソクリを0にリセット</button>
+          <button type="button" id="resetMonthlyBudgetButton" class="danger-button">当期間趣味予算を0にリセット</button>
+        </div>
+        <small>期間内使用額は購入履歴から自動計算されるため、リセット対象外です。</small>
+      </div>
+      <div class="settings-tools data-management-panel">
+        <h3>データ管理</h3>
+        <p>ブラウザのデータ削除やブラウザ変更に備えて、現在のデータをJSONファイルとしてバックアップできます。</p>
+        <div class="form-actions">
+          <button type="button" id="exportDataButton" class="secondary-button">データを書き出す</button>
+          <button type="button" id="importDataButton" class="secondary-button">データを読み込む</button>
+          <button type="button" id="exportDiagnosticReportButton" class="secondary-button">データ診断レポートを書き出す</button>
+          <button type="button" id="resetTestDataButton" class="danger-button">テストデータを初期化する</button>
+          <input id="importDataInput" class="hidden" type="file" accept="application/json,.json">
+        </div>
+        <div class="data-management-status">
+          <small>最終書き出し：<span id="lastExportedAtText">未実行</span></small>
+          <small>最終読み込み：<span id="lastImportedAtText">未実行</span></small>
+        </div>
+      </div>
+    </section>
+    </section>
+
+    <section class="tab-panel hidden" data-tab-panel="form">
+    <section class="panel">
+      <div class="section-title">
+        <h2 id="itemFormTitle">商品登録</h2>
+        <p>発売済み商品の審議を中心に扱います。発売前などは将来拡張用として保存だけします。</p>
+      </div>
+
+      <form id="itemForm" class="item-form">
+        <input id="editingItemId" type="hidden">
+
+        <div class="form-grid">
+          <label>
+            <span>商品名</span>
+            <input id="nameInput" type="text" required placeholder="例：限定カラーのフィギュア">
+          </label>
+          <label>
+            <span>カテゴリ</span>
+            <input id="categoryInput" type="text" placeholder="例：フィギュア、LEGO、PCパーツ">
+          </label>
+          <label>
+            <span>販売状態</span>
+            <select id="itemTypeInput">
+              <option>予約・発売前</option>
+              <option selected>通常販売中</option>
+              <option>品薄・売り切れ気味</option>
+              <option>廃盤・終売</option>
+              <option>不明</option>
+            </select>
+          </label>
+          <label>
+            <span>価格基準</span>
+            <select id="priceBasisTypeInput">
+              <option selected>定価を基準にする</option>
+              <option>中古相場を基準にする</option>
+              <option>参考相場を基準にする</option>
+              <option>基準価格なし・不明</option>
+            </select>
+            <small>現在価格を何と比べるかを選びます。</small>
+          </label>
+          <label id="listPriceField">
+            <span id="listPriceLabel">基準価格（定価）</span>
+            <input id="listPriceInput" type="number" min="0" step="1" inputmode="numeric">
+            <small id="listPriceHelp">メーカー定価・希望小売価格など、比較の土台になる価格です。</small>
+          </label>
+          <div id="priceStatusPreview" class="price-status-preview" aria-live="polite">価格状態：価格比較不可</div>
+          <label>
+            <span>登録時価格</span>
+            <input id="registeredPriceInput" type="number" min="0" step="1" inputmode="numeric">
+          </label>
+          <label id="currentPriceField">
+            <span id="currentPriceLabel">現在価格（登録時は自動入力）</span>
+            <input id="currentPriceInput" type="number" min="0" step="1" inputmode="numeric">
+            <small id="currentPriceHelp">新規登録時は登録時価格と同じ値で保存します。</small>
+          </label>
+          <label>
+            <span>目標価格</span>
+            <input id="targetPriceInput" type="number" min="0" step="1" inputmode="numeric">
+          </label>
+          <label>
+            <span>許容上限価格</span>
+            <input id="maxAcceptablePriceInput" type="number" min="0" step="1" inputmode="numeric">
+          </label>
+          <label>
+            <span>評議会モード</span>
+            <select id="councilModeInput"></select>
+          </label>
+          <label id="legoReleaseDateField">
+            <span>LEGO発売日</span>
+            <input id="releaseDateInput" type="date">
+            <small>カテゴリがLEGOの時だけ、ざっくり廃盤リスクの参考にします。</small>
+          </label>
+        </div>
+
+        <label class="wide-label">
+          <span>メモ</span>
+          <textarea id="memoInput" rows="3" placeholder="欲しい理由、置き場所、迷っている点など"></textarea>
+        </label>
+
+        <div class="score-section">
+          <h3>アクセル要素</h3>
+          <div class="score-grid">
+            <label>
+              <span>欲しい度</span>
+              <small>純粋にどれくらい欲しいか</small>
+              <input id="wantScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>定価で買えなくなって後悔しそう度</span>
+              <small>今買わず、定価で買えなくなった時にどれくらい後悔しそうか</small>
+              <input id="regretScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>レア度・廃盤リスク</span>
+              <small>今後買いにくくなる可能性。LEGOカテゴリでは発売日から自動計算あり</small>
+              <input id="rarityRiskScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>長く楽しめそう度</span>
+              <small>買った後も長く満足できそうか</small>
+              <input id="longEnjoymentScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+          </div>
+        </div>
+
+        <div class="score-section">
+          <h3>ブレーキ要素</h3>
+          <div class="score-grid">
+            <label>
+              <span>置き場所危険度</span>
+              <small>棚・収納・家のスペースをどれくらい圧迫するか</small>
+              <input id="spaceRiskScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>今月買いすぎ度</span>
+              <small>今月すでに趣味予算を使いすぎていないか</small>
+              <input id="overbuyScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>購入説得難易度</span>
+              <small>家族・同居人・未来の自分に購入理由を説明できるか</small>
+              <input id="explanationDifficultyScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+            <label>
+              <span>積み化リスク</span>
+              <small>買っても開封・使用せず積みそうか</small>
+              <input id="backlogRiskScoreInput" type="range" min="1" max="10" value="5"><strong>5</strong>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" id="itemSaveButton" class="primary-button">商品を保存</button>
+          <button type="button" id="cancelEditButton" class="secondary-button hidden">編集をやめる</button>
+        </div>
+      </form>
+
+      <div id="itemAddedPanel" class="completion-panel hidden" aria-live="polite">
+        <p><strong id="itemAddedName">商品</strong>を追加しました</p>
+        <div class="form-actions">
+          <button type="button" id="judgeAddedItemButton" class="primary-button">すぐ購入前審議する</button>
+          <button type="button" id="viewAddedItemButton" class="secondary-button">検討中・保留中で見る</button>
+          <button type="button" id="addAnotherItemButton" class="secondary-button">続けて商品を追加する</button>
+        </div>
+      </div>
+    </section>
+    </section>
+
+    <section class="tab-panel hidden" data-tab-panel="considering">
+    <section class="items-section">
+      <div class="section-title">
+        <h2>検討中・保留中</h2>
+        <p>購入も見送りも確定していない商品です。審議前、買い、保留、見送り、危険な買いの判定結果を含みます。</p>
+      </div>
+      <div id="consideringFilterBar" class="sub-filter-bar" aria-label="購入前審議結果で絞り込み"></div>
+      <div id="consideringItemsList" class="items-list"></div>
+      <p id="consideringEmptyState" class="empty-state">検討中・保留中の商品はありません。</p>
+    </section>
+    </section>
+
+    <section class="tab-panel hidden" data-tab-panel="purchased">
+    <section class="items-section">
+      <div class="section-title">
+        <h2>購入済み</h2>
+        <p>購入日、購入価格、購入区分、購入後評議会の結果を確認できます。</p>
+      </div>
+      <div id="purchasedItemsList" class="items-list"></div>
+      <p id="purchasedEmptyState" class="empty-state">購入済みの商品はありません。</p>
+    </section>
+    </section>
+
+    <section class="tab-panel hidden" data-tab-panel="skipped">
+    <section class="items-section">
+      <div class="section-title">
+        <h2>見送り済み</h2>
+        <p>見送り日と心のヘソクリ加算額を確認できます。後から購入することもできます。</p>
+      </div>
+      <div id="skippedItemsList" class="items-list"></div>
+      <p id="skippedEmptyState" class="empty-state">見送り済みの商品はありません。</p>
+    </section>
+    </section>
+  </main>
+
+  <div id="modeDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modeDialogTitle">
+    <section class="mode-dialog">
+      <div class="section-title">
+        <h2 id="modeDialogTitle">評議会モードを選択</h2>
+        <p>今回の審議に使う口調を選びます。選択したモードは商品に保存されます。</p>
+      </div>
+      <div id="modeDialogOptions" class="mode-options"></div>
+      <div class="form-actions">
+        <button type="button" id="modeDialogCancelButton" class="secondary-button">キャンセル</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="reviewPresentationDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="reviewPresentationTitle">
+    <section class="review-presentation-dialog">
+      <div class="review-presentation-header">
+        <p id="reviewPresentationMode" class="eyebrow">評議会モード</p>
+        <h2 id="reviewPresentationTitle">購入前審議</h2>
+      </div>
+
+      <div id="reviewPresentationStage" class="council-stage">
+        <img id="reviewPresentationImage" class="council-stage-image" src="" alt="">
+        <div id="reviewPresentationFallback" class="council-image-fallback hidden">
+          <strong>NO COUNCIL IMAGE</strong>
+          <span id="reviewPresentationFallbackMode">評議会モード</span>
+        </div>
+        <div id="reviewPresentationEffectLayer" class="council-effect-layer" aria-hidden="true">
+          <span class="stage-glow"></span>
+          <span class="stage-particle particle-one"></span>
+          <span class="stage-particle particle-two"></span>
+          <span class="stage-sweat"></span>
+          <span class="stage-mode-effect"></span>
+        </div>
+        <button type="button" id="reviewPresentationSkipButton" class="review-skip-button">判決をすぐ表示</button>
+        <p id="reviewPresentationStageText" class="council-stage-text">評議会、開廷……</p>
+
+        <div id="reviewPresentationResult" class="review-presentation-result hidden">
+          <p class="review-verdict-label"><span id="reviewPresentationJudgmentLabel">判決</span>：<strong id="reviewPresentationJudgment"></strong></p>
+          <strong id="reviewPresentationCommentLabel">コメント</strong>
+          <p id="reviewPresentationComment"></p>
+          <p id="reviewPresentationMoveText" class="memo"></p>
+        </div>
+      </div>
+
+      <div id="reviewPresentationActions" class="form-actions review-presentation-actions hidden">
+        <button type="button" id="reviewPresentationFilterButton" class="primary-button"></button>
+        <button type="button" id="reviewPresentationCloseButton" class="secondary-button">閉じる</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="purchaseDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="purchaseDialogTitle">
+    <section class="mode-dialog purchase-dialog">
+      <div class="section-title">
+        <h2 id="purchaseDialogTitle">購入後評議会</h2>
+        <p id="purchaseDialogLead">購入情報を入力し、評議会の判決を確認してから保存します。</p>
+      </div>
+
+      <form id="purchaseForm" class="purchase-form">
+        <div class="form-grid">
+          <label>
+            <span>購入日</span>
+            <input id="purchaseDateInput" type="date" required>
+          </label>
+          <label>
+            <span>購入価格</span>
+            <input id="purchasePriceInput" type="number" min="0" step="1" inputmode="numeric" required>
+          </label>
+        </div>
+
+        <div class="score-section">
+          <h3>購入区分</h3>
+          <div id="purchaseTypeOptions" class="mode-options compact-options"></div>
+        </div>
+
+        <div id="purchaseVerdictBox" class="purchase-verdict hidden"></div>
+        <p id="purchaseUnsavedNotice" class="unsaved-notice hidden">まだ購入済みとして保存されていません。下の「購入を確定して保存」を押すと購入済みになります。</p>
+
+        <div class="form-actions">
+          <button type="submit" id="purchaseProceedButton" class="primary-button">購入後評議会へ進む</button>
+          <button type="button" id="purchaseConfirmButton" class="primary-button hidden">購入を確定して保存</button>
+          <button type="button" id="purchaseCancelButton" class="secondary-button">キャンセル</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script src="comments.js"></script>
+  <script src="presentation-assets.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
