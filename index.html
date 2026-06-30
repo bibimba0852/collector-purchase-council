@@ -140,6 +140,20 @@
           <button type="button" id="resetTestDataButton" class="danger-button">テストデータを初期化する</button>
           <input id="importDataInput" class="hidden" type="file" accept="application/json,.json">
         </div>
+        <div class="backup-guide">
+          <h4>iPhoneで使うときのバックアップ</h4>
+          <p>このアプリのデータは、GitHub Pages上ではなく、この端末・このブラウザのlocalStorageに保存されます。別端末や別ブラウザには自動同期されません。</p>
+          <p>端末変更、Safariの履歴やWebサイトデータ削除、誤操作に備えて、設定画面から定期的にJSONバックアップを書き出してください。iPhoneでは「ファイル」アプリなどに保存しておくと安心です。</p>
+          <ul>
+            <li>商品をまとめて登録したあと</li>
+            <li>購入・見送り履歴が増えたあと</li>
+            <li>月末や月初</li>
+            <li>iPhoneの機種変更前</li>
+            <li>Safariの履歴やWebサイトデータを削除する前</li>
+            <li>大きなバージョン更新前</li>
+          </ul>
+          <p>データ診断レポートはバックアップではなく、アプリ内データの状態確認用です。不具合相談に使えますが、商品名やメモが含まれる場合があります。共有前に内容を確認してください。</p>
+        </div>
         <div class="data-management-status">
           <small>最終書き出し：<span id="lastExportedAtText">未実行</span></small>
           <small>最終読み込み：<span id="lastImportedAtText">未実行</span></small>

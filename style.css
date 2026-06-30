@@ -385,6 +385,31 @@ textarea:focus {
   margin-top: 12px;
 }
 
+.backup-guide {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.74);
+}
+
+.backup-guide h4 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.backup-guide p {
+  margin: 8px 0 0;
+  line-height: 1.7;
+}
+
+.backup-guide ul {
+  margin: 10px 0 0;
+  padding-left: 1.2em;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
 .recent-history-panel {
   margin-top: 22px;
 }
