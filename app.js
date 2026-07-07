@@ -2450,6 +2450,37 @@ function renderSummary() {
   setText("#collectorObservedPurchaseCountText", `${collectorBalance.observedPurchaseHistoryCount}件`);
   setText("#collectorBalanceTitleText", collectorBalance.title);
   setText("#collectorBalanceDescriptionText", collectorBalance.description);
+  renderSummaryGauges(collectorBalance, monthlySpent);
+}
+
+// 表示専用：受付端末の予算ゲージとコレクター属性メーターの幅だけを更新する。
+// 集計値は renderSummary が受け取った計算結果をそのまま使い、保存データには触れない。
+function renderSummaryGauges(collectorBalance, monthlySpent) {
+  const budgetGauge = document.querySelector("#budgetGaugeFill");
+  if (budgetGauge) {
+    const budget = toNumber(settings.monthlyBudget);
+    const spent = toNumber(monthlySpent);
+    const isOverBudget = budget > 0 && spent > budget;
+    const remainingRate = budget > 0 ? clamp(((budget - spent) / budget) * 100, 0, 100) : 0;
+    budgetGauge.style.width = isOverBudget ? "100%" : `${remainingRate}%`;
+    budgetGauge.classList.toggle("gauge-over", isOverBudget);
+  }
+
+  const totalLight = toNumber(collectorBalance.totalLight);
+  const totalDark = toNumber(collectorBalance.totalDark);
+
+  const lightMeter = document.querySelector("#collectorLightMeterFill");
+  const darkMeter = document.querySelector("#collectorDarkMeterFill");
+  if (lightMeter && darkMeter) {
+    const totalObserved = totalLight + totalDark;
+    lightMeter.style.width = totalObserved > 0 ? `${(totalLight / totalObserved) * 47}%` : "0%";
+    darkMeter.style.width = totalObserved > 0 ? `${(totalDark / totalObserved) * 47}%` : "0%";
+  }
+
+  const balancePanel = document.querySelector(".collector-balance-panel");
+  if (balancePanel) {
+    balancePanel.classList.toggle("dark-dominant", totalDark > totalLight);
+  }
 }
 
 function renderConsideringFilters() {
@@ -2555,15 +2586,17 @@ function getItemSortTime(item) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+// 表示専用：カードの開閉状態（再描画しても開いたカードを維持するため）
+const openItemCardIds = new Set();
+
 function createItemCard(item) {
   const card = document.createElement("article");
-  card.className = "item-card";
-
   const displayStatus = getDisplayStatus(item);
+  card.className = `item-card${displayStatus.className ? ` card-${displayStatus.className}` : ""}`;
+
   const priceStatus = calculatePriceStatus(item);
   const priceDifference = getPurchaseDifferenceText(item);
   const comment = getDisplayCommentForItem(item);
-  const latestMode = item.councilMode ? ` / ${item.councilMode}` : "";
   const legoRiskText = getLegoRiskText(item);
   const historyHtml = getJudgmentHistoryHtml(item);
   const skippedStockText = item.skipped && item.stockAddedAmount
@@ -2578,46 +2611,68 @@ function createItemCard(item) {
     : "";
   const actionButtonsHtml = getItemActionButtonsHtml(item);
 
+  const primaryVerdictLabel = item.purchased ? "購入後判決" : "推奨";
+  const primaryVerdictText = item.purchased
+    ? item.purchaseJudgment || "購入済み"
+    : getRecommendedAction(item.judgment || "見送り");
+
   card.innerHTML = `
-    <div class="item-card-header">
-      <div>
-        <h3>${escapeHtml(item.name)}</h3>
+    <details class="item-card-details"${openItemCardIds.has(item.id) ? " open" : ""}>
+      <summary class="item-card-summary" aria-label="${escapeHtml(item.name)}の詳細を開閉">
+        <div class="item-card-headline">
+          <div class="item-card-heading">
+            <h3>${escapeHtml(item.name)}</h3>
+            <p class="item-card-subline">${escapeHtml(item.category || "カテゴリ未設定")} ／ ${escapeHtml(getDisplayItemType(item.itemType))}</p>
+          </div>
+          <span class="badge ${displayStatus.className}">${escapeHtml(displayStatus.label)}</span>
+          <span class="item-card-caret" aria-hidden="true"></span>
+        </div>
+        <div class="item-card-quickstats">
+          <div><span>価格基準</span><strong>${escapeHtml(getDisplayPriceBasisType(item.priceBasisType))}</strong></div>
+          <div><span>基準価格</span><strong>${formatYen(item.listPrice)}</strong></div>
+          <div><span>現在価格</span><strong>${formatYen(item.currentPrice)}</strong></div>
+          <div class="quickstat-wide"><span>${primaryVerdictLabel}</span><strong>${escapeHtml(primaryVerdictText)}</strong></div>
+        </div>
+      </summary>
+
+      <div class="item-card-body">
         <div class="item-meta">
-          <span>${escapeHtml(item.category || "カテゴリ未設定")} / ${escapeHtml(getDisplayItemType(item.itemType))}</span>
-          <span>ステータス：${escapeHtml(getActionStatusForItem(item))}${escapeHtml(latestMode)}</span>
-          ${legoRiskText ? `<span>${escapeHtml(legoRiskText)}</span>` : ""}
+          <span class="meta-chip">${escapeHtml(getActionStatusForItem(item))}</span>
+          ${item.councilMode ? `<span class="meta-chip">${escapeHtml(item.councilMode)}</span>` : ""}
+          ${legoRiskText ? `<span class="meta-chip">${escapeHtml(legoRiskText)}</span>` : ""}
+        </div>
+
+        <div class="price-grid">
+          <div><span>登録時価格</span><strong>${formatYen(item.registeredPrice)}</strong></div>
+          <div><span>価格状態</span><strong>${escapeHtml(priceStatus.label)}</strong></div>
+          <div><span>アクセル</span><strong>${item.acceleratorScore || "-"}</strong></div>
+          <div><span>ブレーキ</span><strong>${item.brakeScore || "-"}</strong></div>
+        </div>
+
+        <div class="comment-box">${escapeHtml(comment)}</div>
+        ${historyHtml}
+        ${item.memo ? `<p class="memo">${escapeHtml(item.memo)}</p>` : ""}
+        ${purchaseInfoText ? `<p class="memo">${escapeHtml(purchaseInfoText)}</p>` : ""}
+        ${skippedInfoText ? `<p class="memo">${escapeHtml(skippedInfoText)}</p>` : ""}
+        ${priceDifference ? `<p class="memo">${escapeHtml(priceDifference)}</p>` : ""}
+        ${skippedStockText ? `<p class="memo">${escapeHtml(skippedStockText)}</p>` : ""}
+        ${reversedHeartStockText ? `<p class="memo">${escapeHtml(reversedHeartStockText)}</p>` : ""}
+
+        <div class="card-actions">
+          ${actionButtonsHtml}
         </div>
       </div>
-      <span class="badge ${displayStatus.className}">${escapeHtml(displayStatus.label)}</span>
-    </div>
-
-    <div class="price-grid">
-      <div><span>価格基準</span><strong>${escapeHtml(getDisplayPriceBasisType(item.priceBasisType))}</strong></div>
-      <div><span>基準価格</span><strong>${formatYen(item.listPrice)}</strong></div>
-      <div><span>登録時価格</span><strong>${formatYen(item.registeredPrice)}</strong></div>
-      <div><span>現在価格</span><strong>${formatYen(item.currentPrice)}</strong></div>
-      <div><span>価格状態</span><strong>${escapeHtml(priceStatus.label)}</strong></div>
-    </div>
-
-    <div class="score-result">
-      <div><span>アクセル</span><strong>${item.acceleratorScore || "-"}</strong></div>
-      <div><span>ブレーキ</span><strong>${item.brakeScore || "-"}</strong></div>
-      <div><span>${item.purchased ? "購入後判決" : "推奨"}</span><strong>${escapeHtml(item.purchased ? item.purchaseJudgment || "購入済み" : getRecommendedAction(item.judgment || "見送り"))}</strong></div>
-    </div>
-
-    <div class="comment-box">${escapeHtml(comment)}</div>
-    ${historyHtml}
-    ${item.memo ? `<p class="memo">${escapeHtml(item.memo)}</p>` : ""}
-    ${purchaseInfoText ? `<p class="memo">${escapeHtml(purchaseInfoText)}</p>` : ""}
-    ${skippedInfoText ? `<p class="memo">${escapeHtml(skippedInfoText)}</p>` : ""}
-    ${priceDifference ? `<p class="memo">${escapeHtml(priceDifference)}</p>` : ""}
-    ${skippedStockText ? `<p class="memo">${escapeHtml(skippedStockText)}</p>` : ""}
-    ${reversedHeartStockText ? `<p class="memo">${escapeHtml(reversedHeartStockText)}</p>` : ""}
-
-    <div class="card-actions">
-      ${actionButtonsHtml}
-    </div>
+    </details>
   `;
+
+  const details = card.querySelector(".item-card-details");
+  details.addEventListener("toggle", () => {
+    if (details.open) {
+      openItemCardIds.add(item.id);
+    } else {
+      openItemCardIds.delete(item.id);
+    }
+  });
 
   return card;
 }
@@ -3131,6 +3186,7 @@ function startEditItem(itemId) {
   updatePriceBasisField();
   renderFormPriceStatus();
   updateLegoReleaseDateField();
+  showItemFormWizardAllMode();
   document.querySelector("#itemForm").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -3584,6 +3640,130 @@ function resetItemForm() {
   updatePriceBasisField();
   renderFormPriceStatus();
   updateLegoReleaseDateField();
+  resetItemFormWizardDisplay();
+}
+
+// ==============================
+// 商品フォーム 対話型ウィザード（表示専用）
+// ==============================
+// ここは質問の見せ方・ステップの表示切り替えだけを扱う。
+// フォーム値の読み取り・検証・保存は従来どおり handleItemSubmit /
+// getItemFromForm / validateItemForm が行い、ここからは触れない。
+
+const ITEM_FORM_WIZARD_TOTAL_STEPS = 7;
+let itemFormWizardStep = 1;
+let itemFormWizardMode = "wizard";
+
+function getWizardQuestionText(step) {
+  const nameInput = document.querySelector("#nameInput");
+  const enteredName = nameInput ? nameInput.value.trim() : "";
+  const itemLabel = enteredName ? `「${enteredName}」` : "その品";
+  const questions = {
+    1: "ようこそだニャ、ご主人。今日はどんな品を評議会へ持ち込むのかニャ？",
+    2: `ふむふむ、${itemLabel}だニャ。いま市場では、どんな売られ方をしてるのかニャ？`,
+    3: "次はお金の話だニャ。数字は正直に頼むニャ。審議の土台になるのだニャ。",
+    4: `作戦会議だニャ。${itemLabel}、いくらで狙って、いくらまでなら許せるかニャ？`,
+    5: "ここからは心のアクセルを測るニャ。見栄を張っても評議会は誤魔化せないニャ。",
+    6: "今度は理性のブレーキだニャ。目を逸らしちゃダメだニャ。",
+    7: "最後に言い残したことはあるかニャ？よければこのまま評議会へ提出するニャ！"
+  };
+  return questions[step] || questions[1];
+}
+
+function setupItemFormWizard() {
+  const nextButton = document.querySelector("#wizardNextButton");
+  if (!nextButton) return;
+
+  nextButton.addEventListener("click", goToNextWizardStep);
+  document.querySelector("#wizardBackButton").addEventListener("click", () => setItemFormWizardStep(itemFormWizardStep - 1));
+  document.querySelector("#wizardModeToggleButton").addEventListener("click", toggleItemFormWizardMode);
+  renderItemFormWizard();
+}
+
+function goToNextWizardStep() {
+  if (!validateCurrentWizardStepDisplay()) return;
+  setItemFormWizardStep(itemFormWizardStep + 1);
+}
+
+function setItemFormWizardStep(step) {
+  itemFormWizardStep = clamp(step, 1, ITEM_FORM_WIZARD_TOTAL_STEPS);
+  renderItemFormWizard();
+}
+
+// ブラウザ標準の入力チェック（required等）を現在ステップ内だけ先に見せる。
+// 保存時の検証（validateItemForm）の代わりにはしない。
+function validateCurrentWizardStepDisplay() {
+  const currentStep = document.querySelector(`.wizard-step[data-wizard-step="${itemFormWizardStep}"]`);
+  if (!currentStep) return true;
+
+  const fields = currentStep.querySelectorAll("input, select, textarea");
+  for (const field of fields) {
+    if (!field.disabled && !field.checkValidity()) {
+      field.reportValidity();
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function toggleItemFormWizardMode() {
+  itemFormWizardMode = itemFormWizardMode === "wizard" ? "all" : "wizard";
+  renderItemFormWizard();
+}
+
+function resetItemFormWizardDisplay() {
+  itemFormWizardStep = 1;
+  renderItemFormWizard();
+}
+
+function showItemFormWizardAllMode() {
+  itemFormWizardMode = "all";
+  renderItemFormWizard();
+}
+
+function renderItemFormWizard() {
+  const form = document.querySelector("#itemForm");
+  const nav = document.querySelector("#wizardNav");
+  if (!form || !nav) return;
+
+  const isWizard = itemFormWizardMode === "wizard";
+  const isLastStep = itemFormWizardStep >= ITEM_FORM_WIZARD_TOTAL_STEPS;
+
+  form.classList.toggle("wizard-mode", isWizard);
+  form.querySelectorAll(".wizard-step").forEach((step) => {
+    const stepNumber = Number(step.dataset.wizardStep);
+    step.classList.toggle("wizard-step-hidden", isWizard && stepNumber !== itemFormWizardStep);
+  });
+
+  nav.classList.toggle("hidden", !isWizard);
+  document.querySelector("#wizardBackButton").disabled = itemFormWizardStep <= 1;
+  document.querySelector("#wizardNextButton").classList.toggle("hidden", isLastStep);
+  document.querySelector("#itemFormActions").classList.toggle("hidden", isWizard && !isLastStep);
+  document.querySelector("#wizardModeToggleButton").textContent = isWizard
+    ? "一覧形式でまとめて入力する"
+    : "対話形式（案内係）に戻る";
+  document.querySelector("#wizardQuestionText").textContent = isWizard
+    ? getWizardQuestionText(itemFormWizardStep)
+    : "全項目を一覧表示中だニャ。まとめて記入して、評議会へ提出するニャ。";
+
+  const progress = document.querySelector("#wizardProgress");
+  progress.classList.toggle("hidden", !isWizard);
+
+  if (isWizard) {
+    progress.innerHTML = "";
+    for (let step = 1; step <= ITEM_FORM_WIZARD_TOTAL_STEPS; step += 1) {
+      const dot = document.createElement("span");
+      const stateClass = step === itemFormWizardStep ? " current" : step < itemFormWizardStep ? " done" : "";
+      dot.className = `wizard-progress-dot${stateClass}`;
+      progress.appendChild(dot);
+    }
+
+    const label = document.createElement("strong");
+    label.className = "wizard-progress-label";
+    label.textContent = `Q${itemFormWizardStep} / ${ITEM_FORM_WIZARD_TOTAL_STEPS}`;
+    progress.appendChild(label);
+  }
 }
 
 function getTabNameForItem(item) {
@@ -4240,5 +4420,6 @@ function escapeHtml(value) {
 
 loadData();
 setupEvents();
+setupItemFormWizard();
 renderAll();
 
