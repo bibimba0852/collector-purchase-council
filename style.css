@@ -1097,6 +1097,72 @@ p {
   line-height: 1.6;
 }
 
+/* ---------- 通販検索リンク（PR） ---------- */
+
+.shop-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.pr-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #efe4c8;
+  color: var(--faint);
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.shop-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 2px solid var(--line);
+  border-radius: 9px;
+  background: var(--cream);
+  color: var(--ink);
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 2px 0 rgba(70, 57, 42, 0.3);
+}
+
+.shop-link-button:hover,
+.shop-link-button:focus-visible {
+  outline: none;
+  border-color: var(--outline);
+}
+
+.shop-link-button:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 rgba(70, 57, 42, 0.3);
+}
+
+.shop-amazon {
+  border-color: rgba(224, 123, 63, 0.55);
+  color: #a05a1d;
+}
+
+.shop-rakuten {
+  border-color: rgba(191, 55, 42, 0.45);
+  color: #a83e2f;
+}
+
+.shop-kakaku {
+  border-color: rgba(74, 111, 168, 0.5);
+  color: #3d5f96;
+}
+
 /* ---------- ボタン：トイボタン ---------- */
 
 .form-actions,
@@ -2330,6 +2396,10 @@ fieldset.wizard-step {
   .card-actions .secondary-button,
   .card-actions .danger-button {
     flex: 1 1 calc(50% - 8px);
+  }
+
+  .shop-link-button {
+    flex: 1 1 auto;
   }
 
   .usher-console {

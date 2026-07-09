@@ -2586,6 +2586,62 @@ function getItemSortTime(item) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+// ==============================
+// 通販検索リンク（表示専用・アフィリエイト対応）
+// ==============================
+// IDが空欄でも通常の検索リンクとして動作する。
+// アフィリエイト提携後、下の2つの定数に自分のIDを貼るだけで有効になる。
+// リンクは商品名を検索キーワードとして通販サイトに渡すだけで、
+// アプリ内の保存データ・判定・履歴には一切影響しない。
+
+const SHOP_SEARCH_CONFIG = {
+  // Amazonアソシエイトのトラッキングタグ（例: "yourname-22"）
+  amazonAssociateTag: "",
+  // 楽天アフィリエイトID（例: "1234abcd.5678efgh"）
+  rakutenAffiliateId: ""
+};
+
+function buildAmazonSearchUrl(itemName) {
+  const url = new URL("https://www.amazon.co.jp/s");
+  url.searchParams.set("k", itemName);
+
+  if (SHOP_SEARCH_CONFIG.amazonAssociateTag) {
+    url.searchParams.set("tag", SHOP_SEARCH_CONFIG.amazonAssociateTag);
+  }
+
+  return url.toString();
+}
+
+function buildRakutenSearchUrl(itemName) {
+  const searchUrl = `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(itemName)}/`;
+
+  if (!SHOP_SEARCH_CONFIG.rakutenAffiliateId) {
+    return searchUrl;
+  }
+
+  return `https://hb.afl.rakuten.co.jp/hgc/${encodeURIComponent(SHOP_SEARCH_CONFIG.rakutenAffiliateId)}/?pc=${encodeURIComponent(searchUrl)}&m=${encodeURIComponent(searchUrl)}`;
+}
+
+// 価格.comはアフィリエイトなしの純粋な検索リンク
+function buildKakakuSearchUrl(itemName) {
+  return `https://search.kakaku.com/${encodeURIComponent(itemName)}/`;
+}
+
+function getShopLinksHtml(item) {
+  if (item.purchased || !item.name) {
+    return "";
+  }
+
+  return `
+    <div class="shop-links" aria-label="通販サイトで商品名を検索">
+      <span class="pr-chip" title="アフィリエイトリンク（PR）を含みます">PR</span>
+      <a class="shop-link-button shop-amazon" href="${escapeHtml(buildAmazonSearchUrl(item.name))}" target="_blank" rel="sponsored noopener noreferrer">Amazonで探す</a>
+      <a class="shop-link-button shop-rakuten" href="${escapeHtml(buildRakutenSearchUrl(item.name))}" target="_blank" rel="sponsored noopener noreferrer">楽天で探す</a>
+      <a class="shop-link-button shop-kakaku" href="${escapeHtml(buildKakakuSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">価格.comで探す</a>
+    </div>
+  `;
+}
+
 // 表示専用：カードの開閉状態（再描画しても開いたカードを維持するため）
 const openItemCardIds = new Set();
 
@@ -2657,6 +2713,7 @@ function createItemCard(item) {
         ${priceDifference ? `<p class="memo">${escapeHtml(priceDifference)}</p>` : ""}
         ${skippedStockText ? `<p class="memo">${escapeHtml(skippedStockText)}</p>` : ""}
         ${reversedHeartStockText ? `<p class="memo">${escapeHtml(reversedHeartStockText)}</p>` : ""}
+        ${getShopLinksHtml(item)}
 
         <div class="card-actions">
           ${actionButtonsHtml}
