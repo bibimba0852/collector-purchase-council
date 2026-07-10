@@ -187,8 +187,8 @@
       </div>
       <div class="settings-tools">
         <h3 class="settings-block-title">外部リンクとPR表記について</h3>
-        <p>商品カードの「Amazonで探す」「楽天で探す」「価格.comで探す」は、商品名を検索キーワードとして各サイトを開く外部リンクです。このうちAmazon・楽天のリンクにはアフィリエイトリンク（PR）が含まれることがあり、リンク先での購入により開発者に紹介料が支払われる場合があります。価格.comのリンクは通常の検索リンクです。</p>
-        <p>リンクを開くと商品名が検索キーワードとして各サイトへ送られます。それ以外のアプリ内データ（価格・スコア・審議履歴など）が外部に送信されることはありません。</p>
+        <p>商品カードの「Amazonで探す」「楽天で探す」「価格.comで探す」は、商品名（入力されていればメーカー・型番も）を検索キーワードとして各サイトを開く外部リンクです。このうちAmazon・楽天のリンクにはアフィリエイトリンク（PR）が含まれることがあり、リンク先での購入により開発者に紹介料が支払われる場合があります。価格.comのリンクは通常の検索リンクです。検索リンクでは、その検索キーワード以外のアプリ内データ（価格・スコア・審議履歴など）は外部に送信されません。</p>
+        <p>「🐱 AIで相場を偵察」ボタンは、選んだ商品の <strong>商品名・メーカー・型番・カテゴリ・販売状態・発売日・商品URL・メモ・各価格情報</strong> を、相場調査を依頼するプロンプトとしてクリップボードにコピーし、ChatGPT（chatgpt.com）を開きます。<strong>メモも送信対象に含まれます</strong>。送信されるのはボタンを押したその商品の情報だけで、他の商品や審議履歴は送信されません。買うかどうかの判断はプロンプトで依頼せず、アプリの評議会に残しています。</p>
       </div>
     </section>
     </section>
@@ -290,6 +290,20 @@
             <label>
               <span>カテゴリ</span>
               <input id="categoryInput" type="text" placeholder="例：フィギュア、LEGO、PCパーツ">
+            </label>
+            <label>
+              <span>メーカー・ブランド（任意）</span>
+              <input id="makerInput" type="text" placeholder="例：グッドスマイルカンパニー">
+              <small>分かる範囲でOK。相場調査の精度が上がります。</small>
+            </label>
+            <label>
+              <span>型番・品番・セット番号（任意）</span>
+              <input id="modelNumberInput" type="text" placeholder="例：10316、GSC-12345">
+            </label>
+            <label>
+              <span>商品URL（任意）</span>
+              <input id="productUrlInput" type="url" inputmode="url" placeholder="https://...">
+              <small>公式ページや販売ページのURL。カードから開けるようになります。</small>
             </label>
           </div>
         </fieldset>

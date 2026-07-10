@@ -2587,6 +2587,257 @@ function getItemSortTime(item) {
 }
 
 // ==============================
+// AI相場偵察（表示専用）
+// ==============================
+// 商品情報から価格調査プロンプトを組み立ててクリップボードにコピーし、
+// ChatGPTを新規タブで開く。保存データ・判定・履歴には一切影響しない。
+
+const AI_ASSIST_CONFIG = {
+  // 将来ChatGPT以外に差し替え可能にするための定数（shop configと同じ流儀）
+  chatUrl: "https://chatgpt.com/"
+};
+
+// テキスト任意項目：空なら（未登録）
+function promptText(value) {
+  return (value && String(value).trim()) ? String(value).trim() : "（未登録）";
+}
+
+// 価格：0以下なら「未設定」、正なら「7,980円」形式（"円" は戻り値に含む）
+function promptPrice(value) {
+  const number = toNumber(value);
+  return number > 0 ? `${number.toLocaleString("ja-JP")}円` : "未設定";
+}
+
+function buildMarketResearchPrompt(item) {
+  return `あなたは、コレクター向け商品の市場価格を調査するアシスタントです。
+
+以下の商品について、現在の相場、在庫状況、安く買える候補、価格を見るうえでの注意点を調べて整理してください。
+
+この依頼は、購入判断ではなく、価格・在庫・入手性の調査です。
+趣味としての価値判断や、買うべきかどうかの結論は不要です。
+
+# 調査対象
+
+商品名：
+${promptText(item.name)}
+
+メーカー・ブランド：
+${promptText(item.maker)}
+
+型番・品番・セット番号：
+${promptText(item.modelNumber)}
+
+カテゴリ：
+${promptText(item.category)}
+
+販売状態メモ：
+${item.itemType}
+
+商品URL：
+${promptText(item.productUrl)}
+
+発売日・発売予定日：
+${promptText(item.releaseDate)}
+
+メモ：
+${promptText(item.memo)}
+
+# アプリに登録している価格情報
+
+価格基準：
+${item.priceBasisType}
+
+定価・基準価格：
+${promptPrice(item.listPrice)}
+
+登録時価格：
+${promptPrice(item.registeredPrice)}
+
+現在検討中の価格：
+${promptPrice(item.currentPrice)}
+
+目標価格：
+${promptPrice(item.targetPrice)}
+
+許容上限価格：
+${promptPrice(item.maxAcceptablePrice)}
+
+# 調査条件
+
+* まず、商品名・メーカー・型番・商品URLから、調査対象の商品をできるだけ正確に特定してください。
+* 日本国内から購入できる店舗・サイトを優先してください。
+* 新品、中古、フリマ、オークションで価格差がある場合は分けてください。
+* 送料、税込価格、ポイント還元、在庫状況が分かる場合は区別してください。
+* 売り切れ価格、過去の落札価格、現在販売中の価格は混同しないでください。
+* 型番違い、色違い、サイズ違い、再販版、限定版、並行輸入品、付属品欠品、箱傷み、偽物・類似品の可能性があれば注意点に入れてください。
+* 商品URLの価格だけで判断せず、他の販売候補も比較してください。
+* 情報が確認できない場合は、推測で断定せず「確認できない」と書いてください。
+
+# 回答形式
+
+## 市場調査サマリー
+
+調査日：
+対象商品の特定精度：
+新品相場：
+中古相場：
+フリマ・オークション相場：
+最安候補：
+送料込み最安候補：
+現在検討中の価格の位置づけ：
+価格傾向：
+
+## 価格候補一覧
+
+| 区分 | 店舗・サイト | 商品状態 | 価格 | 送料 | 送料込み目安 | 在庫状況 | URL | 注意点 |
+| -- | ------ | ---- | -: | -: | -----: | ---- | --- | --- |
+
+## 現在価格との比較
+
+現在検討中の価格：
+目標価格：
+許容上限価格：
+
+相場より安いと見られる価格帯：
+相場並みと見られる価格帯：
+相場より高いと見られる価格帯：
+
+## 見落とし注意ポイント
+
+* 型番・品番違い：
+* 新品と中古の差：
+* 付属品・箱・保証：
+* 送料・手数料：
+* 在庫・再販可能性：
+* フリマ・オークションで見るべき点：
+* その他：
+
+## 価格調査としての要点
+
+購入判断ではなく、価格調査として重要な点だけを箇条書きでまとめてください。`;
+}
+
+function copyTextToClipboard(text) {
+  let ok = false;
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "absolute";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length); // iOS必須
+    ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch (error) {
+    ok = false;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+  return ok;
+}
+
+// ボタン押下ではまず確認モーダルを出す。実際のコピー＆遷移は
+// モーダル内「ChatGPTを開く」ボタンのクリック（ユーザージェスチャー）で同期実行する。
+// こうすることで、注意文を読む前に画面遷移してしまうのを防ぎつつ、
+// ポップアップブロック / iOSのクリップボード失敗も回避する。
+function handleAiResearch(itemId) {
+  const item = items.find((target) => target.id === itemId);
+  if (!item) return;
+
+  showAiResearchConfirm(item);
+}
+
+function showAiResearchConfirm(item) {
+  const dialogId = "aiResearchConfirmDialog";
+  const existingDialog = document.querySelector(`#${dialogId}`);
+  if (existingDialog) {
+    existingDialog.remove();
+  }
+
+  const dialog = document.createElement("div");
+  dialog.id = dialogId;
+  dialog.className = "dialog-backdrop";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", `${dialogId}Title`);
+  dialog.innerHTML = `
+    <section class="mode-dialog ai-research-dialog">
+      <div class="section-title">
+        <div>
+          <p class="panel-eyebrow">SCOUT REQUEST</p>
+          <h2 id="${dialogId}Title">🐱 AIに相場を偵察させるニャ</h2>
+        </div>
+      </div>
+      <div class="ai-research-note">
+        <p>「ChatGPTを開く」を押すと、こうなるニャ：</p>
+        <ul>
+          <li><strong>ChatGPTのページが新しいタブで開く</strong>ニャ（chatgpt.com）。</li>
+          <li>この商品の<strong>調査依頼書をクリップボードにコピー</strong>しておくニャ。開いた先の入力欄に<strong>貼り付け（ペースト）して送信</strong>してほしいニャ。</li>
+          <li>依頼書には<strong>メモの内容も含まれる</strong>ニャ。人に見せたくない私的なメモが入っていないか、送る前に確認するニャ。</li>
+        </ul>
+        <p class="ai-research-note-sub">買うかどうかの判断は依頼しないニャ。相場・在庫・最安の偵察だけニャ。判断は評議会の仕事ニャ。</p>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="primary-button" id="${dialogId}ProceedButton">ChatGPTを開く</button>
+        <button type="button" class="secondary-button" id="${dialogId}CancelButton">やめておく</button>
+      </div>
+    </section>
+  `;
+
+  const closeDialog = () => dialog.remove();
+
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) {
+      closeDialog();
+    }
+  });
+  dialog.querySelector(`#${dialogId}CancelButton`).addEventListener("click", closeDialog);
+  dialog.querySelector(`#${dialogId}ProceedButton`).addEventListener("click", () => {
+    // ユーザージェスチャー内で同期的にコピー→遷移する
+    const prompt = buildMarketResearchPrompt(item);
+    const copied = copyTextToClipboard(prompt);
+    window.open(AI_ASSIST_CONFIG.chatUrl, "_blank", "noopener");
+    closeDialog();
+
+    if (copied) {
+      showAiToast("調査依頼書をコピーしたニャ！ChatGPTに貼り付けて送るのニャ。");
+    } else {
+      showAiToast("コピーできなかったニャ…表示された依頼書を手動でコピーしてニャ。");
+      alert(prompt); // 最終フォールバック
+    }
+  });
+
+  document.body.appendChild(dialog);
+}
+
+let aiToastTimer = null;
+
+function showAiToast(message) {
+  let toast = document.querySelector("#aiToast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "aiToast";
+    toast.className = "ai-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+
+  toast.textContent = message;
+  toast.classList.add("visible");
+
+  if (aiToastTimer) {
+    clearTimeout(aiToastTimer);
+  }
+  aiToastTimer = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, 4000);
+}
+
+// ==============================
 // 通販検索リンク（表示専用・アフィリエイト対応）
 // ==============================
 // IDが空欄でも通常の検索リンクとして動作する。
@@ -2627,17 +2878,49 @@ function buildKakakuSearchUrl(itemName) {
   return `https://search.kakaku.com/${encodeURIComponent(itemName)}/`;
 }
 
+// href に使ってよいのは http / https のURLだけ（javascript:等の混入防止）
+function isSafeHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (error) {
+    return false;
+  }
+}
+
+function getProductUrlLinkHtml(item) {
+  if (!item.productUrl || !isSafeHttpUrl(item.productUrl)) {
+    return "";
+  }
+
+  return `<a class="shop-link-button shop-product-page" href="${escapeHtml(item.productUrl)}" target="_blank" rel="noopener noreferrer">登録URLを開く</a>`;
+}
+
+// 検索キーワードは商品名にメーカー・型番を足して精度を上げる（入力済みのものだけ連結）
+function buildShopSearchKeyword(item) {
+  return [item.name, item.maker, item.modelNumber]
+    .map((value) => (value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
 function getShopLinksHtml(item) {
   if (item.purchased || !item.name) {
     return "";
   }
 
+  const keyword = buildShopSearchKeyword(item);
+
   return `
-    <div class="shop-links" aria-label="通販サイトで商品名を検索">
-      <span class="pr-chip" title="アフィリエイトリンク（PR）を含みます">PR</span>
-      <a class="shop-link-button shop-amazon" href="${escapeHtml(buildAmazonSearchUrl(item.name))}" target="_blank" rel="sponsored noopener noreferrer">Amazonで探す</a>
-      <a class="shop-link-button shop-rakuten" href="${escapeHtml(buildRakutenSearchUrl(item.name))}" target="_blank" rel="sponsored noopener noreferrer">楽天で探す</a>
-      <a class="shop-link-button shop-kakaku" href="${escapeHtml(buildKakakuSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">価格.comで探す</a>
+    <div class="shop-links" aria-label="相場をしらべる">
+      <button type="button" class="shop-link-button shop-ai" data-action="ai-research" data-id="${item.id}">🐱 AIで相場を偵察</button>
+      ${getProductUrlLinkHtml(item)}
+      <div class="shop-search-row">
+        <span class="pr-chip" title="アフィリエイトリンク（PR）を含みます">PR</span>
+        <a class="shop-link-button shop-amazon" href="${escapeHtml(buildAmazonSearchUrl(keyword))}" target="_blank" rel="sponsored noopener noreferrer">Amazonで探す</a>
+        <a class="shop-link-button shop-rakuten" href="${escapeHtml(buildRakutenSearchUrl(keyword))}" target="_blank" rel="sponsored noopener noreferrer">楽天で探す</a>
+        <a class="shop-link-button shop-kakaku" href="${escapeHtml(buildKakakuSearchUrl(keyword))}" target="_blank" rel="noopener noreferrer">価格.comで探す</a>
+      </div>
     </div>
   `;
 }
@@ -2678,7 +2961,7 @@ function createItemCard(item) {
         <div class="item-card-headline">
           <div class="item-card-heading">
             <h3>${escapeHtml(item.name)}</h3>
-            <p class="item-card-subline">${escapeHtml(item.category || "カテゴリ未設定")} ／ ${escapeHtml(getDisplayItemType(item.itemType))}</p>
+            <p class="item-card-subline">${escapeHtml(item.category || "カテゴリ未設定")} ／ ${escapeHtml(getDisplayItemType(item.itemType))}${item.maker ? ` ／ ${escapeHtml(item.maker)}` : ""}</p>
           </div>
           <span class="badge ${displayStatus.className}">${escapeHtml(displayStatus.label)}</span>
           <span class="item-card-caret" aria-hidden="true"></span>
@@ -2694,6 +2977,7 @@ function createItemCard(item) {
       <div class="item-card-body">
         <div class="item-meta">
           <span class="meta-chip">${escapeHtml(getActionStatusForItem(item))}</span>
+          ${item.modelNumber ? `<span class="meta-chip">品番 ${escapeHtml(item.modelNumber)}</span>` : ""}
           ${item.councilMode ? `<span class="meta-chip">${escapeHtml(item.councilMode)}</span>` : ""}
           ${legoRiskText ? `<span class="meta-chip">${escapeHtml(legoRiskText)}</span>` : ""}
         </div>
@@ -3095,6 +3379,9 @@ function handleItemAction(event) {
     case "undo-skip":
       undoSkipped(itemId);
       return;
+    case "ai-research":
+      handleAiResearch(itemId);
+      return;
     default:
       return;
   }
@@ -3217,6 +3504,9 @@ function startEditItem(itemId) {
   document.querySelector("#editingItemId").value = item.id;
   document.querySelector("#nameInput").value = item.name;
   document.querySelector("#categoryInput").value = item.category;
+  document.querySelector("#makerInput").value = item.maker || "";
+  document.querySelector("#modelNumberInput").value = item.modelNumber || "";
+  document.querySelector("#productUrlInput").value = item.productUrl || "";
   document.querySelector("#itemTypeInput").value = getSelectableItemType(item.itemType);
   document.querySelector("#priceBasisTypeInput").value = getSelectablePriceBasisType(item.priceBasisType);
   document.querySelector("#listPriceInput").value = item.listPrice || "";
@@ -3583,6 +3873,9 @@ function getItemFromForm() {
   return {
     name: document.querySelector("#nameInput").value.trim(),
     category: document.querySelector("#categoryInput").value.trim(),
+    maker: document.querySelector("#makerInput").value.trim(),
+    modelNumber: document.querySelector("#modelNumberInput").value.trim(),
+    productUrl: document.querySelector("#productUrlInput").value.trim(),
     itemType: getSelectableItemType(document.querySelector("#itemTypeInput").value),
     priceBasisType,
     listPrice: priceBasisType === UNKNOWN_PRICE_BASIS_TYPE ? 0 : toNumber(document.querySelector("#listPriceInput").value),
@@ -3623,6 +3916,9 @@ function createEmptyItem() {
     id: "",
     name: "",
     category: "",
+    maker: "",
+    modelNumber: "",
+    productUrl: "",
     itemType: DEFAULT_ITEM_TYPE,
     status: "検討中",
     priceBasisType: DEFAULT_PRICE_BASIS_TYPE,

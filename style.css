@@ -1097,15 +1097,21 @@ p {
   line-height: 1.6;
 }
 
-/* ---------- 通販検索リンク（PR） ---------- */
+/* ---------- 相場をしらべる（AI偵察 / 登録URL / 通販検索） ---------- */
 
 .shop-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.shop-search-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding-top: 10px;
-  border-top: 1px dashed var(--line);
 }
 
 .pr-chip {
@@ -1161,6 +1167,101 @@ p {
 .shop-kakaku {
   border-color: rgba(74, 111, 168, 0.5);
   color: #3d5f96;
+}
+
+.shop-product-page {
+  width: 100%;
+  border-color: rgba(46, 143, 133, 0.55);
+  color: var(--teal-deep);
+}
+
+/* AIで相場を偵察：この行の主役。フル幅・ターコイズ */
+.shop-ai {
+  width: 100%;
+  min-height: 46px;
+  border-color: var(--outline);
+  background: linear-gradient(180deg, #3aa093, var(--teal) 55%, var(--teal-deep));
+  color: var(--cream);
+  font-size: 0.9rem;
+  box-shadow: 0 3px 0 var(--outline), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  text-shadow: 0 1px 1px rgba(20, 60, 55, 0.35);
+}
+
+.shop-ai:hover,
+.shop-ai:focus-visible {
+  outline: none;
+  filter: brightness(1.06);
+}
+
+.shop-ai:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--outline), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* ---------- AI偵察 確認モーダル ---------- */
+
+.ai-research-note {
+  margin-bottom: 4px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--cream);
+  padding: 14px 16px;
+}
+
+.ai-research-note p {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.ai-research-note ul {
+  margin: 0 0 10px;
+  padding-left: 1.2em;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.75;
+}
+
+.ai-research-note li {
+  margin-bottom: 6px;
+}
+
+.ai-research-note-sub {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---------- AI偵察トースト ---------- */
+
+.ai-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  z-index: 60;
+  max-width: min(440px, calc(100vw - 32px));
+  border: 2px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--cream);
+  box-shadow: 0 10px 28px rgba(60, 45, 25, 0.3), var(--shadow-toy);
+  padding: 12px 16px;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.6;
+  text-align: center;
+  transform: translateX(-50%) translateY(12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.ai-toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
 }
 
 /* ---------- ボタン：トイボタン ---------- */
