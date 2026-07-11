@@ -3177,6 +3177,257 @@ function getLatestMarketResearch(item) {
   return history.length > 0 ? history[history.length - 1] : null;
 }
 
+function getLatestMarketResearchPair(item) {
+  const history = normalizeMarketResearchHistory(item && item.marketResearchHistory);
+  if (history.length < 2) return null;
+
+  return {
+    previous: history[history.length - 2],
+    latest: history[history.length - 1]
+  };
+}
+
+function isComparableMarketResearchPrice(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function createPriceDiff(label, previousValue, latestValue) {
+  const hasPrevious = isComparableMarketResearchPrice(previousValue);
+  const hasLatest = isComparableMarketResearchPrice(latestValue);
+  const difference = hasPrevious && hasLatest ? latestValue - previousValue : null;
+  const changeRate = difference !== null && previousValue > 0
+    ? (difference / previousValue) * 100
+    : null;
+  const direction = difference === null
+    ? "unavailable"
+    : difference > 0
+      ? "up"
+      : difference < 0
+        ? "down"
+        : "flat";
+  let changeText = "比較不可";
+
+  if (hasPrevious && hasLatest) {
+    const differenceText = difference === 0
+      ? "変化なし"
+      : `${difference > 0 ? "+" : ""}${formatYen(difference)}`;
+    changeText = `${formatYen(previousValue)} → ${formatYen(latestValue)}（${differenceText}）`;
+  } else if (hasPrevious) {
+    changeText = `${formatYen(previousValue)} → 今回なし`;
+  } else if (hasLatest) {
+    changeText = `前回なし → ${formatYen(latestValue)}`;
+  }
+
+  return {
+    label,
+    previousValue: hasPrevious ? previousValue : null,
+    latestValue: hasLatest ? latestValue : null,
+    difference,
+    changeRate,
+    direction,
+    displayText: changeText
+  };
+}
+
+function normalizeMarketResearchDiffStatus(value) {
+  return typeof value === "string"
+    ? value.trim().toLocaleLowerCase("en-US").replace(/[\s-]+/g, "_")
+    : "";
+}
+
+function createStatusDiff(label, previousValue, latestValue, fieldName = "") {
+  const previousRaw = typeof previousValue === "string" && previousValue.trim()
+    ? previousValue.trim()
+    : "unknown";
+  const latestRaw = typeof latestValue === "string" && latestValue.trim()
+    ? latestValue.trim()
+    : "unknown";
+
+  return {
+    label,
+    fieldName,
+    previousValue: previousRaw,
+    latestValue: latestRaw,
+    previousNormalized: normalizeMarketResearchDiffStatus(previousRaw),
+    latestNormalized: normalizeMarketResearchDiffStatus(latestRaw),
+    changed: normalizeMarketResearchDiffStatus(previousRaw) !== normalizeMarketResearchDiffStatus(latestRaw),
+    displayText: `${formatMarketResearchDisplayValue(fieldName, previousRaw)} → ${formatMarketResearchDisplayValue(fieldName, latestRaw)}`
+  };
+}
+
+function getMarketResearchComparisonDate(marketResearch) {
+  const value = marketResearch.researchMeta.researchedAt || marketResearch.importedAt;
+  if (!value) return "不明";
+
+  const datePrefix = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+  return datePrefix ? datePrefix[0] : String(value);
+}
+
+function getMarketResearchConditionSeverity(fieldName, value) {
+  const normalizedValue = normalizeMarketResearchDiffStatus(value);
+  const severityMaps = {
+    stockStatus: {
+      available: 0, in_stock: 0, stocked: 0, normal: 0,
+      preorder: 1, pre_order: 1, backorder: 1,
+      low_stock: 2, limited_stock: 2,
+      out_of_stock: 3, sold_out: 3, discontinued: 4
+    },
+    availability: {
+      available: 0, in_stock: 0, normal: 0,
+      limited: 2, scarce: 2, out_of_stock: 3, sold_out: 3, unavailable: 3
+    },
+    supplyStatus: {
+      normal: 0, regular: 0, stable: 0, regular_sale: 0,
+      limited: 1, low: 2, tight: 2, scarce: 2, unstable: 2, discontinued: 3
+    },
+    soldOutRisk: {
+      none: 0, low: 1, medium: 2, high: 3, very_high: 4, critical: 4
+    }
+  };
+  return Object.prototype.hasOwnProperty.call(severityMaps[fieldName] || {}, normalizedValue)
+    ? severityMaps[fieldName][normalizedValue]
+    : null;
+}
+
+function hasMarketResearchAvailabilityWorsened(statusDiffs) {
+  return statusDiffs.some((entry) => {
+    if (!['stockStatus', 'availability', 'supplyStatus', 'soldOutRisk'].includes(entry.fieldName)) {
+      return false;
+    }
+    const previousSeverity = getMarketResearchConditionSeverity(entry.fieldName, entry.previousValue);
+    const latestSeverity = getMarketResearchConditionSeverity(entry.fieldName, entry.latestValue);
+    return previousSeverity !== null && latestSeverity !== null && latestSeverity > previousSeverity;
+  });
+}
+
+function createMarketResearchDiffAdvice(diff) {
+  const typicalPriceDiff = diff.priceDiffs.find((entry) => entry.key === "marketPriceTypical");
+  const latestMinimumPrice = diff.latest.priceSummary.marketPriceMin;
+  const latestNextCheckPrice = diff.latest.purchaseTiming.nextCheckPrice;
+  const reachedNextCheckPrice = isComparableMarketResearchPrice(latestMinimumPrice)
+    && isComparableMarketResearchPrice(latestNextCheckPrice)
+    && latestMinimumPrice <= latestNextCheckPrice;
+
+  if (diff.availabilityWorsened) {
+    return "在庫まわりの条件が前回より悪くなっているニャ。価格だけでなく、売り切れリスクや供給状況も一緒に確認した方がよさそうだニャ。";
+  }
+
+  if (typicalPriceDiff && typicalPriceDiff.changeRate !== null && typicalPriceDiff.changeRate >= 10) {
+    return "相場中心価格は前回より大きく上がっているニャ。焦って結論を出さず、価格と在庫を早めに再確認するのがよさそうだニャ。";
+  }
+
+  if (typicalPriceDiff && typicalPriceDiff.changeRate !== null && typicalPriceDiff.changeRate <= -10) {
+    return "相場中心価格は前回より大きく下がっているニャ。在庫も悪化していなければ、条件を見比べる材料が増えたと考えられるニャ。";
+  }
+
+  if (reachedNextCheckPrice) {
+    return "最安価格が次回確認価格以下になっているニャ。送料・状態・販売元を確認して、条件の良い出品か見てみる価値はありそうだニャ。";
+  }
+
+  if (typicalPriceDiff && typicalPriceDiff.changeRate !== null && Math.abs(typicalPriceDiff.changeRate) < 3) {
+    return "相場中心価格は前回から大きく動いていないニャ。在庫状況も大きく変わっていなければ、もう少し様子を見る材料になるニャ。";
+  }
+
+  if (typicalPriceDiff && typicalPriceDiff.changeRate !== null && typicalPriceDiff.changeRate >= 3) {
+    return "相場中心価格は前回より上がっているニャ。価格変化が続くか、在庫とあわせて次回も確認するとよさそうだニャ。";
+  }
+
+  if (typicalPriceDiff && typicalPriceDiff.changeRate !== null && typicalPriceDiff.changeRate <= -3) {
+    return "相場中心価格は前回より下がっているニャ。在庫が大きく悪化していなければ、次の価格確認も有効だニャ。";
+  }
+
+  return "比較できる価格情報がまだ少ないニャ。次回も同じ項目を確認すると、相場の動きが読み取りやすくなるニャ。";
+}
+
+function createMarketResearchDiff(previous, latest) {
+  const normalizedPrevious = mergeWithDefaultMarketResearch(previous);
+  const normalizedLatest = mergeWithDefaultMarketResearch(latest);
+  const priceDiffs = [
+    { key: "marketPriceTypical", label: "相場中心", previous: normalizedPrevious.priceSummary.marketPriceTypical, latest: normalizedLatest.priceSummary.marketPriceTypical },
+    { key: "marketPriceMin", label: "最安価格", previous: normalizedPrevious.priceSummary.marketPriceMin, latest: normalizedLatest.priceSummary.marketPriceMin },
+    { key: "marketPriceMax", label: "最高価格", previous: normalizedPrevious.priceSummary.marketPriceMax, latest: normalizedLatest.priceSummary.marketPriceMax },
+    { key: "officialPrice", label: "公式価格", previous: normalizedPrevious.priceSummary.officialPrice, latest: normalizedLatest.priceSummary.officialPrice },
+    { key: "nextCheckPrice", label: "次回確認価格", previous: normalizedPrevious.purchaseTiming.nextCheckPrice, latest: normalizedLatest.purchaseTiming.nextCheckPrice }
+  ].map((entry) => ({
+    key: entry.key,
+    ...createPriceDiff(entry.label, entry.previous, entry.latest)
+  }));
+  const availabilityDiffs = [
+    ["在庫状況", "stockStatus", normalizedPrevious.availabilitySummary.stockStatus, normalizedLatest.availabilitySummary.stockStatus],
+    ["販売状況", "availability", normalizedPrevious.availabilitySummary.availability, normalizedLatest.availabilitySummary.availability],
+    ["供給状況", "supplyStatus", normalizedPrevious.availabilitySummary.supplyStatus, normalizedLatest.availabilitySummary.supplyStatus],
+    ["売り切れリスク", "soldOutRisk", normalizedPrevious.availabilitySummary.soldOutRisk, normalizedLatest.availabilitySummary.soldOutRisk],
+    ["販売区分", "limitedOrRegular", normalizedPrevious.availabilitySummary.limitedOrRegular, normalizedLatest.availabilitySummary.limitedOrRegular]
+  ].map(([label, fieldName, previousValue, latestValue]) => (
+    createStatusDiff(label, previousValue, latestValue, fieldName)
+  ));
+  const signalDiffs = [
+    ["価格傾向", "priceTrend", normalizedPrevious.marketSignals.priceTrend, normalizedLatest.marketSignals.priceTrend],
+    ["転売圧", "resalePressure", normalizedPrevious.marketSignals.resalePressure, normalizedLatest.marketSignals.resalePressure],
+    ["需要感", "demandSignal", normalizedPrevious.marketSignals.demandSignal, normalizedLatest.marketSignals.demandSignal],
+    ["価格変動", "volatility", normalizedPrevious.marketSignals.volatility, normalizedLatest.marketSignals.volatility],
+    ["セール期待", "saleLikelihood", normalizedPrevious.marketSignals.saleLikelihood, normalizedLatest.marketSignals.saleLikelihood]
+  ].map(([label, fieldName, previousValue, latestValue]) => (
+    createStatusDiff(label, previousValue, latestValue, fieldName)
+  ));
+  const diff = {
+    previous: normalizedPrevious,
+    latest: normalizedLatest,
+    previousDate: getMarketResearchComparisonDate(normalizedPrevious),
+    latestDate: getMarketResearchComparisonDate(normalizedLatest),
+    priceDiffs,
+    availabilityDiffs,
+    signalDiffs,
+    statusDiffs: [...availabilityDiffs, ...signalDiffs]
+  };
+  diff.availabilityWorsened = hasMarketResearchAvailabilityWorsened(diff.availabilityDiffs);
+  diff.advice = createMarketResearchDiffAdvice(diff);
+  return diff;
+}
+
+function renderMarketResearchDiffRows(rows) {
+  return rows.map((entry) => `
+    <li>
+      <span>${escapeHtml(entry.label)}</span>
+      <strong>${escapeHtml(entry.displayText)}</strong>
+    </li>
+  `).join("");
+}
+
+function renderMarketResearchDiff(item) {
+  const pair = getLatestMarketResearchPair(item);
+  if (!pair) return "";
+
+  const diff = createMarketResearchDiff(pair.previous, pair.latest);
+  return `
+    <details class="market-research-diff-box">
+      <summary>前回調査からの変化</summary>
+      <div class="market-research-diff-content">
+        <dl class="market-research-diff-dates">
+          <div><dt>前回</dt><dd>${escapeHtml(diff.previousDate)}</dd></div>
+          <div><dt>今回</dt><dd>${escapeHtml(diff.latestDate)}</dd></div>
+        </dl>
+        <section>
+          <h4>価格の変化</h4>
+          <ul>${renderMarketResearchDiffRows(diff.priceDiffs)}</ul>
+        </section>
+        <section>
+          <h4>市場状況の変化</h4>
+          <ul>${renderMarketResearchDiffRows(diff.availabilityDiffs)}</ul>
+        </section>
+        <section>
+          <h4>市場シグナルの変化</h4>
+          <ul>${renderMarketResearchDiffRows(diff.signalDiffs)}</ul>
+        </section>
+        <aside class="market-research-diff-advice">
+          <strong>執事猫コメント</strong>
+          <p>${escapeHtml(diff.advice)}</p>
+        </aside>
+      </div>
+    </details>
+  `;
+}
+
 function formatMarketResearchPrice(value) {
   return typeof value === "number" && Number.isFinite(value) ? formatYen(value) : "未確認";
 }
@@ -3211,6 +3462,37 @@ const MARKET_RESEARCH_DISPLAY_LABELS = {
     discontinued: "供給終了",
     mixed: "販売先により異なる"
   },
+  availability: {
+    unknown: "未確認",
+    widely_available: "広く流通",
+    available: "販売あり",
+    in_stock: "販売あり",
+    normal: "通常販売",
+    limited: "限定流通",
+    scarce: "入手困難",
+    out_of_stock: "在庫なし",
+    sold_out: "売り切れ",
+    unavailable: "販売なし",
+    preorder: "予約受付中",
+    pre_order: "予約受付中",
+    discontinued: "販売終了",
+    mixed: "販売先により異なる"
+  },
+  soldOutRisk: {
+    unknown: "未確認",
+    none: "なし",
+    low: "低",
+    medium: "中",
+    high: "高",
+    very_high: "非常に高い",
+    critical: "非常に高い"
+  },
+  limitedOrRegular: {
+    unknown: "未確認",
+    regular: "通常商品",
+    limited: "限定商品",
+    mixed: "販売形態混在"
+  },
   priceTrend: {
     unknown: "未確認",
     stable: "横ばい",
@@ -3223,6 +3505,39 @@ const MARKET_RESEARCH_DISPLAY_LABELS = {
     volatile: "変動が大きい",
     premium: "高騰傾向",
     mixed: "販売先により異なる"
+  },
+  resalePressure: {
+    unknown: "未確認",
+    none: "なし",
+    low: "低",
+    medium: "中",
+    high: "高",
+    very_high: "非常に高い"
+  },
+  demandSignal: {
+    unknown: "未確認",
+    none: "なし",
+    low: "低",
+    normal: "通常",
+    medium: "中",
+    high: "高",
+    very_high: "非常に高い"
+  },
+  volatility: {
+    unknown: "未確認",
+    low: "低",
+    medium: "中",
+    high: "高",
+    stable: "安定",
+    volatile: "変動が大きい"
+  },
+  saleLikelihood: {
+    unknown: "未確認",
+    none: "なし",
+    low: "低",
+    medium: "中",
+    high: "高",
+    very_high: "非常に高い"
   },
   confidence: {
     unknown: "未確認",
@@ -3298,6 +3613,7 @@ function getMarketResearchCardHtml(item) {
         <div><span>傾向</span><strong>${escapeHtml(formatMarketResearchDisplayValue("priceTrend", signals.priceTrend))}</strong></div>
       </div>
       ${latest.summaries.marketSummary ? `<p>${escapeHtml(latest.summaries.marketSummary)}</p>` : ""}
+      ${renderMarketResearchDiff(item)}
       <details class="market-research-history-box">
         <summary>相場調査履歴 ${history.length}件</summary>
         <ul>${historyRows}</ul>

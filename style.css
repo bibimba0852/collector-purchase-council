@@ -1166,6 +1166,111 @@ p {
   line-height: 1.65;
 }
 
+.market-research-diff-box {
+  min-width: 0;
+  border: 1px solid rgba(46, 143, 133, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 253, 244, 0.84);
+  padding: 10px;
+}
+
+.market-research-diff-box > summary {
+  cursor: pointer;
+  color: var(--teal-deep);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.market-research-diff-content {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.market-research-diff-dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.market-research-diff-dates div {
+  min-width: 0;
+  border: 1px solid rgba(46, 143, 133, 0.22);
+  border-radius: 7px;
+  background: #eef7ed;
+  padding: 7px 8px;
+}
+
+.market-research-diff-dates dt {
+  color: var(--faint);
+  font-size: 0.65rem;
+}
+
+.market-research-diff-dates dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.market-research-diff-content section h4 {
+  margin: 0 0 6px;
+  color: var(--teal-deep);
+  font-size: 0.74rem;
+}
+
+.market-research-diff-content section ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.market-research-diff-content section li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-top: 1px solid rgba(46, 143, 133, 0.18);
+  padding-top: 6px;
+}
+
+.market-research-diff-content section li span {
+  color: var(--faint);
+  font-size: 0.66rem;
+}
+
+.market-research-diff-content section li strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.73rem;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.market-research-diff-advice {
+  border-left: 4px solid var(--mustard);
+  border-radius: 6px;
+  background: #fbf1d7;
+  padding: 10px 11px;
+}
+
+.market-research-diff-advice strong {
+  color: var(--red-deep);
+  font-size: 0.72rem;
+}
+
+.market-research-diff-advice p {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
+
 .market-research-history-box {
   border-top: 1px dashed rgba(46, 143, 133, 0.4);
   padding-top: 8px;
@@ -2984,6 +3089,10 @@ fieldset.wizard-step {
 
   .market-draft-choice-grid,
   .market-research-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .market-research-diff-dates {
     grid-template-columns: 1fr;
   }
 
