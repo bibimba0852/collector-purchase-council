@@ -10,6 +10,9 @@ const DIAGNOSTIC_SCHEMA_VERSION = 2;
 const PRE_PURCHASE_REVIEW_VERSION = "v2.2.1";
 const POST_PURCHASE_VERSION = "v3.0";
 const SKIP_HISTORY_VERSION = "v3.3";
+const MARKET_RESEARCH_SCHEMA_VERSION = 1;
+const MARKET_RESEARCH_PROMPT_VERSION = "market-research-v1";
+const MARKET_RESEARCH_MANUAL_IMPORT_SOURCE = "manual-json-paste";
 
 const COUNCIL_MODES = [
   "通常審議モード",
@@ -98,6 +101,8 @@ let consideringFilter = "all";
 let reviewPresentationTimers = [];
 let pendingReviewPresentation = null;
 let lastAddedItemId = "";
+let pendingDraftMarketResearch = null;
+let preparedDraftMarketResearch = null;
 
 // ==============================
 // localStorage保存/読み込み
@@ -157,17 +162,21 @@ function normalizeSettings(sourceSettings) {
 }
 
 function normalizeItem(item) {
+  const hasCurrentPrice = Object.prototype.hasOwnProperty.call(item, "currentPrice");
   const normalized = {
     ...createEmptyItem(),
     ...item,
     itemType: item.itemType || DEFAULT_ITEM_TYPE,
     priceBasisType: item.priceBasisType || DEFAULT_PRICE_BASIS_TYPE,
-    currentPrice: item.currentPrice || item.registeredPrice || 0,
+    // 旧データに currentPrice 自体がない時だけ registeredPrice を補完する。
+    // 明示的に保存された 0 は「価格未設定」としてそのまま維持する。
+    currentPrice: hasCurrentPrice ? toNumber(item.currentPrice) : toNumber(item.registeredPrice),
     releaseDate: item.releaseDate || "",
     rarityRiskAutoScore: item.rarityRiskAutoScore || 0,
     rarityRiskAutoLevel: item.rarityRiskAutoLevel || 0,
     rarityRiskManualOverride: Boolean(item.rarityRiskManualOverride),
-    judgmentHistory: Array.isArray(item.judgmentHistory) ? item.judgmentHistory : []
+    judgmentHistory: Array.isArray(item.judgmentHistory) ? item.judgmentHistory : [],
+    marketResearchHistory: normalizeMarketResearchHistory(item.marketResearchHistory)
   };
 
   if (!item.scoreScale) {
@@ -287,12 +296,53 @@ function validateImportData(data) {
     return "このファイルはコレクター購入評議会のバックアップファイルではありません。";
   }
 
+  if (data.schemaVersion !== DATA_SCHEMA_VERSION) {
+    return `対応していないバックアップ形式です。schemaVersion ${DATA_SCHEMA_VERSION} のファイルを選んでください。`;
+  }
+
   if (!data.settings || typeof data.settings !== "object" || Array.isArray(data.settings)) {
     return "バックアップファイルに設定データが見つかりません。";
   }
 
   if (!Array.isArray(data.items)) {
     return "バックアップファイルの商品データが正しくありません。";
+  }
+
+  const itemIds = new Set();
+  for (let index = 0; index < data.items.length; index += 1) {
+    const item = data.items[index];
+    const itemNumber = index + 1;
+
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return `商品データ ${itemNumber} 件目の形式が正しくありません。`;
+    }
+
+    if (typeof item.id !== "string" || !item.id.trim()) {
+      return `商品データ ${itemNumber} 件目に有効なIDがありません。`;
+    }
+
+    if (itemIds.has(item.id)) {
+      return `商品データに重複したIDがあります: ${item.id}`;
+    }
+    itemIds.add(item.id);
+
+    if (typeof item.name !== "string") {
+      return `商品データ ${itemNumber} 件目の商品名が正しくありません。`;
+    }
+
+    if (item.judgmentHistory !== undefined && !Array.isArray(item.judgmentHistory)) {
+      return `商品データ ${itemNumber} 件目の審議履歴が正しくありません。`;
+    }
+
+    if (item.marketResearchHistory !== undefined && !Array.isArray(item.marketResearchHistory)) {
+      return `商品データ ${itemNumber} 件目のAI相場調査履歴が正しくありません。`;
+    }
+
+    for (const booleanField of ["purchased", "skipped"]) {
+      if (item[booleanField] !== undefined && typeof item[booleanField] !== "boolean") {
+        return `商品データ ${itemNumber} 件目の ${booleanField} が正しくありません。`;
+      }
+    }
   }
 
   return "";
@@ -1000,6 +1050,7 @@ function resetTestData() {
   const confirmed = confirm("現在の商品データ・設定データを初期化します。\nこの操作は元に戻せません。\n必要な場合は先に「データを書き出す」でバックアップしてください。\n\n本当に初期化しますか？");
   if (!confirmed) return;
 
+  clearPendingDraftMarketResearch();
   localStorage.removeItem(SETTINGS_STORAGE_KEY);
   localStorage.removeItem(ITEMS_STORAGE_KEY);
   location.reload();
@@ -2587,6 +2638,681 @@ function getItemSortTime(item) {
 }
 
 // ==============================
+// AI相場調査JSON v1
+// ==============================
+
+const MARKET_RESEARCH_REQUIRED_SECTIONS = [
+  "target",
+  "researchMeta",
+  "priceSummary",
+  "availabilitySummary",
+  "summaries"
+];
+
+const MARKET_RESEARCH_OPTIONAL_OBJECT_SECTIONS = [
+  "marketSignals",
+  "purchaseTiming"
+];
+
+const MARKET_RESEARCH_PRICE_PATHS = [
+  "target.referencePrice",
+  "priceSummary.marketPriceMin",
+  "priceSummary.marketPriceTypical",
+  "priceSummary.marketPriceMax",
+  "priceSummary.lowestObservedPrice",
+  "priceSummary.highestObservedPrice",
+  "priceSummary.officialPrice",
+  "priceSummary.usedPriceMin",
+  "priceSummary.usedPriceTypical",
+  "priceSummary.discountRateVsReference",
+  "marketSignals.premiumRate",
+  "purchaseTiming.nextCheckPrice"
+];
+
+function createDefaultMarketResearchSource() {
+  return {
+    name: "",
+    url: "",
+    shopType: "",
+    price: null,
+    currency: "JPY",
+    stockStatus: "unknown",
+    condition: "new",
+    shippingFee: null,
+    checkedAt: ""
+  };
+}
+
+function createDefaultMarketResearch() {
+  return {
+    schemaVersion: MARKET_RESEARCH_SCHEMA_VERSION,
+    target: {
+      productName: "",
+      maker: "",
+      brand: "",
+      category: "",
+      modelNumber: "",
+      productUrl: "",
+      releaseDate: "",
+      referencePrice: null,
+      referencePriceType: "listPrice"
+    },
+    researchMeta: {
+      researchedAt: "",
+      researchedBy: "ChatGPT",
+      researchPromptVersion: MARKET_RESEARCH_PROMPT_VERSION,
+      confidence: "medium",
+      userVerified: false,
+      note: ""
+    },
+    priceSummary: {
+      currency: "JPY",
+      marketPriceMin: null,
+      marketPriceTypical: null,
+      marketPriceMax: null,
+      lowestObservedPrice: null,
+      highestObservedPrice: null,
+      officialPrice: null,
+      usedPriceMin: null,
+      usedPriceTypical: null,
+      shippingIncluded: "mixed",
+      discountRateVsReference: null
+    },
+    availabilitySummary: {
+      stockStatus: "unknown",
+      availability: "unknown",
+      supplyStatus: "unknown",
+      soldOutRisk: "unknown",
+      restockLikelihood: "unknown",
+      limitedOrRegular: "unknown"
+    },
+    marketSignals: {
+      priceTrend: "unknown",
+      resalePressure: "unknown",
+      premiumRate: null,
+      demandSignal: "unknown",
+      volatility: "unknown",
+      releasePhase: "unknown",
+      saleLikelihood: "unknown"
+    },
+    purchaseTiming: {
+      urgency: "unknown",
+      waitReason: "",
+      buyNowReason: "",
+      nextCheckTrigger: "",
+      nextCheckPrice: null
+    },
+    summaries: {
+      marketSummary: "",
+      priceComment: "",
+      availabilityComment: "",
+      cautionComment: ""
+    },
+    cautions: [],
+    sources: []
+  };
+}
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeMarketResearchSection(defaultSection, sourceSection) {
+  const source = isPlainObject(sourceSection) ? sourceSection : {};
+  const normalized = {};
+
+  Object.entries(defaultSection).forEach(([key, defaultValue]) => {
+    const value = source[key];
+    if (defaultValue === null) {
+      normalized[key] = value === null || value === undefined
+        ? null
+        : (typeof value === "number" && Number.isFinite(value) ? value : null);
+    } else if (typeof defaultValue === "boolean") {
+      normalized[key] = typeof value === "boolean" ? value : defaultValue;
+    } else {
+      normalized[key] = typeof value === "string" ? value : defaultValue;
+    }
+  });
+
+  return normalized;
+}
+
+function hasMarketResearchSourceContent(source) {
+  return Boolean(
+    source.name ||
+    source.url ||
+    source.shopType ||
+    source.price !== null ||
+    source.shippingFee !== null ||
+    source.checkedAt ||
+    source.stockStatus !== "unknown"
+  );
+}
+
+function mergeWithDefaultMarketResearch(sourceResearch) {
+  const source = isPlainObject(sourceResearch) ? sourceResearch : {};
+  const defaults = createDefaultMarketResearch();
+  const sources = Array.isArray(source.sources)
+    ? source.sources
+      .filter(isPlainObject)
+      .map((entry) => normalizeMarketResearchSection(createDefaultMarketResearchSource(), entry))
+      .filter(hasMarketResearchSourceContent)
+    : [];
+
+  return {
+    schemaVersion: MARKET_RESEARCH_SCHEMA_VERSION,
+    target: normalizeMarketResearchSection(defaults.target, source.target),
+    researchMeta: normalizeMarketResearchSection(defaults.researchMeta, source.researchMeta),
+    priceSummary: normalizeMarketResearchSection(defaults.priceSummary, source.priceSummary),
+    availabilitySummary: normalizeMarketResearchSection(defaults.availabilitySummary, source.availabilitySummary),
+    marketSignals: normalizeMarketResearchSection(defaults.marketSignals, source.marketSignals),
+    purchaseTiming: normalizeMarketResearchSection(defaults.purchaseTiming, source.purchaseTiming),
+    summaries: normalizeMarketResearchSection(defaults.summaries, source.summaries),
+    cautions: Array.isArray(source.cautions)
+      ? source.cautions.filter((entry) => typeof entry === "string")
+      : [],
+    sources,
+    importedAt: typeof source.importedAt === "string" ? source.importedAt : "",
+    importSource: typeof source.importSource === "string" ? source.importSource : ""
+  };
+}
+
+function normalizeMarketResearchHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter(isPlainObject)
+    .map(mergeWithDefaultMarketResearch);
+}
+
+function getNestedValue(source, path) {
+  return path.split(".").reduce((value, key) => (
+    value && typeof value === "object" ? value[key] : undefined
+  ), source);
+}
+
+function collectMissingMarketResearchPaths(source, template = createDefaultMarketResearch(), prefix = "") {
+  const target = isPlainObject(source) ? source : {};
+  const missingPaths = [];
+
+  Object.entries(template).forEach(([key, defaultValue]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (!Object.prototype.hasOwnProperty.call(target, key)) {
+      missingPaths.push(path);
+      return;
+    }
+
+    if (isPlainObject(defaultValue)) {
+      if (isPlainObject(target[key])) {
+        missingPaths.push(...collectMissingMarketResearchPaths(target[key], defaultValue, path));
+      } else {
+        missingPaths.push(path);
+      }
+    }
+  });
+
+  return missingPaths;
+}
+
+function validateMarketResearchPayload(sourceResearch) {
+  const errors = [];
+  const warnings = [];
+
+  if (!isPlainObject(sourceResearch)) {
+    return {
+      errors: ["相場調査JSONのルートはオブジェクトである必要があります。"],
+      warnings,
+      missingPaths: []
+    };
+  }
+
+  if (sourceResearch.schemaVersion !== MARKET_RESEARCH_SCHEMA_VERSION) {
+    errors.push(`この相場調査JSONのschemaVersionには対応していません。対応バージョン: ${MARKET_RESEARCH_SCHEMA_VERSION}`);
+  }
+
+  MARKET_RESEARCH_REQUIRED_SECTIONS.forEach((sectionName) => {
+    if (!isPlainObject(sourceResearch[sectionName])) {
+      errors.push(`必須構造 ${sectionName} がありません。`);
+    }
+  });
+
+  MARKET_RESEARCH_OPTIONAL_OBJECT_SECTIONS.forEach((sectionName) => {
+    if (sourceResearch[sectionName] !== undefined && !isPlainObject(sourceResearch[sectionName])) {
+      errors.push(`${sectionName} はオブジェクトである必要があります。`);
+    }
+  });
+
+  MARKET_RESEARCH_PRICE_PATHS.forEach((path) => {
+    const value = getNestedValue(sourceResearch, path);
+    if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value))) {
+      errors.push(`${path} は number または null で入力してください。`);
+    }
+  });
+
+  if (sourceResearch.sources !== undefined && !Array.isArray(sourceResearch.sources)) {
+    errors.push("sources は配列である必要があります。");
+  } else if (Array.isArray(sourceResearch.sources)) {
+    sourceResearch.sources.forEach((source, index) => {
+      if (!isPlainObject(source)) {
+        errors.push(`sources[${index}] はオブジェクトである必要があります。`);
+        return;
+      }
+
+      if (source.url !== undefined && typeof source.url !== "string") {
+        errors.push(`sources[${index}].url は文字列で入力してください。`);
+      }
+
+      for (const field of ["price", "shippingFee"]) {
+        const value = source[field];
+        if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value))) {
+          errors.push(`sources[${index}].${field} は number または null で入力してください。`);
+        }
+      }
+    });
+  }
+
+  if (sourceResearch.cautions !== undefined) {
+    if (!Array.isArray(sourceResearch.cautions)) {
+      errors.push("cautions は配列である必要があります。");
+    } else if (sourceResearch.cautions.some((entry) => typeof entry !== "string")) {
+      errors.push("cautions は文字列の配列で入力してください。");
+    }
+  }
+
+  if (sourceResearch.target && sourceResearch.target.productUrl !== undefined && typeof sourceResearch.target.productUrl !== "string") {
+    errors.push("target.productUrl は文字列で入力してください。");
+  }
+
+  if (sourceResearch.researchMeta && sourceResearch.researchMeta.userVerified !== undefined && typeof sourceResearch.researchMeta.userVerified !== "boolean") {
+    errors.push("researchMeta.userVerified は boolean で入力してください。");
+  }
+
+  const marketPriceMin = getNestedValue(sourceResearch, "priceSummary.marketPriceMin");
+  const marketPriceTypical = getNestedValue(sourceResearch, "priceSummary.marketPriceTypical");
+  const marketPriceMax = getNestedValue(sourceResearch, "priceSummary.marketPriceMax");
+  if ([marketPriceMin, marketPriceTypical, marketPriceMax].every((value) => typeof value === "number" && Number.isFinite(value))) {
+    if (!(marketPriceMin <= marketPriceTypical && marketPriceTypical <= marketPriceMax)) {
+      warnings.push("価格帯の大小関係が不自然です。marketPriceMin <= marketPriceTypical <= marketPriceMax を確認してください。");
+    }
+  }
+
+  if (!getNestedValue(sourceResearch, "target.productName")) {
+    warnings.push("target.productName が空です。");
+  }
+  if (!getNestedValue(sourceResearch, "researchMeta.researchedAt")) {
+    warnings.push("researchMeta.researchedAt（調査日）が空です。");
+  }
+  if (!getNestedValue(sourceResearch, "priceSummary.currency")) {
+    warnings.push("priceSummary.currency が空です。JPYとして補完します。");
+  }
+  if (!getNestedValue(sourceResearch, "summaries.marketSummary")) {
+    warnings.push("summaries.marketSummary が空です。");
+  }
+  if (!Array.isArray(sourceResearch.sources) || sourceResearch.sources.length === 0) {
+    warnings.push("情報源が0件です。");
+  }
+
+  const missingPaths = collectMissingMarketResearchPaths(sourceResearch);
+  if (missingPaths.length > 0) {
+    const examples = missingPaths.slice(0, 6).join("、");
+    const suffix = missingPaths.length > 6 ? ` ほか${missingPaths.length - 6}件` : "";
+    warnings.push(`不足項目をデフォルト値で補完します: ${examples}${suffix}`);
+  }
+
+  return {
+    errors: [...new Set(errors)],
+    warnings: [...new Set(warnings)],
+    missingPaths
+  };
+}
+
+function tryParseJsonObject(candidateText) {
+  try {
+    const parsed = JSON.parse(candidateText);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function extractFirstJsonObjectText(text) {
+  for (let startIndex = text.indexOf("{"); startIndex >= 0; startIndex = text.indexOf("{", startIndex + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = startIndex; index < text.length; index += 1) {
+      const character = text[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = text.slice(startIndex, index + 1);
+          if (tryParseJsonObject(candidate)) {
+            return candidate;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return "";
+}
+
+function parseMarketResearchJsonText(inputText) {
+  if (typeof inputText !== "string" || !inputText.trim()) {
+    return {
+      ok: false,
+      error: "AI相場調査JSONを貼り付けてください。"
+    };
+  }
+
+  const trimmedText = inputText.trim();
+  const directParsed = tryParseJsonObject(trimmedText);
+  if (directParsed) {
+    return { ok: true, value: directParsed, extractedFrom: "json-object" };
+  }
+
+  const codeBlockPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let codeBlockMatch = codeBlockPattern.exec(trimmedText);
+  while (codeBlockMatch) {
+    const codeBlockParsed = tryParseJsonObject(codeBlockMatch[1].trim());
+    if (codeBlockParsed) {
+      return { ok: true, value: codeBlockParsed, extractedFrom: "json-code-block" };
+    }
+    codeBlockMatch = codeBlockPattern.exec(trimmedText);
+  }
+
+  const extractedObjectText = extractFirstJsonObjectText(trimmedText);
+  const extractedObject = extractedObjectText ? tryParseJsonObject(extractedObjectText) : null;
+  if (extractedObject) {
+    return { ok: true, value: extractedObject, extractedFrom: "answer-text" };
+  }
+
+  return {
+    ok: false,
+    error: "JSON部分を読み取れませんでした。回答末尾のJSONコードブロック、またはJSONオブジェクト部分だけを貼り付けてください。"
+  };
+}
+
+function normalizeComparableMarketResearchText(value) {
+  return String(value || "").trim().toLocaleLowerCase("ja-JP").replace(/\s+/g, " ");
+}
+
+function normalizeComparableUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function areMarketResearchPricesSimilar(firstResearch, secondResearch) {
+  const priceKeys = ["marketPriceTypical", "marketPriceMin", "marketPriceMax"];
+  return priceKeys.some((priceKey) => {
+    const firstPrice = firstResearch.priceSummary[priceKey];
+    const secondPrice = secondResearch.priceSummary[priceKey];
+    if (typeof firstPrice !== "number" || typeof secondPrice !== "number") return false;
+    const allowedDifference = Math.max(100, Math.max(Math.abs(firstPrice), Math.abs(secondPrice)) * 0.05);
+    return Math.abs(firstPrice - secondPrice) <= allowedDifference;
+  });
+}
+
+function createMarketResearchItemWarnings(item, marketResearch) {
+  const warnings = [];
+  const target = marketResearch.target;
+  const comparisons = [
+    ["商品名", item.name, target.productName],
+    ["メーカー・ブランド", item.maker, target.maker || target.brand],
+    ["型番", item.modelNumber, target.modelNumber]
+  ];
+
+  comparisons.forEach(([label, itemValue, researchValue]) => {
+    if (!itemValue || !researchValue) return;
+    if (normalizeComparableMarketResearchText(itemValue) !== normalizeComparableMarketResearchText(researchValue)) {
+      warnings.push(`${label}が登録商品と一致しない可能性があります。登録商品: ${itemValue} / 調査結果: ${researchValue}`);
+    }
+  });
+
+  if (item.productUrl && target.productUrl && normalizeComparableUrl(item.productUrl) !== normalizeComparableUrl(target.productUrl)) {
+    warnings.push(`商品URLが登録商品と一致しない可能性があります。登録商品: ${item.productUrl} / 調査結果: ${target.productUrl}`);
+  }
+
+  const researchedAt = normalizeComparableMarketResearchText(marketResearch.researchMeta.researchedAt);
+  const productName = normalizeComparableMarketResearchText(target.productName);
+  const hasPossibleDuplicate = normalizeMarketResearchHistory(item.marketResearchHistory).some((entry) => (
+    researchedAt &&
+    productName &&
+    normalizeComparableMarketResearchText(entry.researchMeta.researchedAt) === researchedAt &&
+    normalizeComparableMarketResearchText(entry.target.productName) === productName &&
+    areMarketResearchPricesSimilar(entry, marketResearch)
+  ));
+
+  if (hasPossibleDuplicate) {
+    warnings.push("同じ調査日・同じ商品らしい相場調査結果がすでに保存されています。重複して保存する場合は内容を確認してください。");
+  }
+
+  return warnings;
+}
+
+function prepareMarketResearchImport(item, inputText) {
+  const parsedResult = parseMarketResearchJsonText(inputText);
+  if (!parsedResult.ok) {
+    return {
+      ok: false,
+      errors: [parsedResult.error],
+      warnings: [],
+      marketResearch: null,
+      extractedFrom: ""
+    };
+  }
+
+  const validation = validateMarketResearchPayload(parsedResult.value);
+  if (validation.errors.length > 0) {
+    return {
+      ok: false,
+      errors: validation.errors,
+      warnings: validation.warnings,
+      marketResearch: null,
+      extractedFrom: parsedResult.extractedFrom
+    };
+  }
+
+  const normalizedResearch = mergeWithDefaultMarketResearch(parsedResult.value);
+  const itemWarnings = createMarketResearchItemWarnings(item, normalizedResearch);
+
+  return {
+    ok: true,
+    errors: [],
+    warnings: [...new Set([...validation.warnings, ...itemWarnings])],
+    marketResearch: normalizedResearch,
+    extractedFrom: parsedResult.extractedFrom
+  };
+}
+
+function saveMarketResearchToItem(itemId, marketResearch) {
+  const importedAt = new Date().toISOString();
+  const storedResearch = {
+    ...mergeWithDefaultMarketResearch(marketResearch),
+    importedAt,
+    importSource: MARKET_RESEARCH_MANUAL_IMPORT_SOURCE
+  };
+  let itemFound = false;
+
+  items = items.map((item) => {
+    if (item.id !== itemId) return item;
+    itemFound = true;
+    return {
+      ...item,
+      marketResearchHistory: [
+        ...normalizeMarketResearchHistory(item.marketResearchHistory),
+        storedResearch
+      ],
+      updatedAt: importedAt
+    };
+  });
+
+  if (!itemFound) {
+    return { ok: false, research: null };
+  }
+
+  saveItems();
+  renderAll();
+  return { ok: true, research: storedResearch };
+}
+
+function getLatestMarketResearch(item) {
+  const history = normalizeMarketResearchHistory(item && item.marketResearchHistory);
+  return history.length > 0 ? history[history.length - 1] : null;
+}
+
+function formatMarketResearchPrice(value) {
+  return typeof value === "number" && Number.isFinite(value) ? formatYen(value) : "未確認";
+}
+
+const MARKET_RESEARCH_DISPLAY_LABELS = {
+  stockStatus: {
+    unknown: "未確認",
+    available: "在庫あり",
+    in_stock: "在庫あり",
+    stocked: "在庫あり",
+    low_stock: "残りわずか",
+    limited_stock: "在庫少なめ",
+    out_of_stock: "在庫なし",
+    sold_out: "売り切れ",
+    backorder: "取り寄せ",
+    preorder: "予約受付中",
+    pre_order: "予約受付中",
+    discontinued: "販売終了",
+    mixed: "店舗により異なる"
+  },
+  supplyStatus: {
+    unknown: "未確認",
+    normal: "通常流通",
+    regular: "通常流通",
+    regular_sale: "通常販売",
+    stable: "安定供給",
+    limited: "限定流通",
+    tight: "品薄",
+    low: "供給少なめ",
+    scarce: "品薄",
+    unstable: "供給不安定",
+    discontinued: "供給終了",
+    mixed: "販売先により異なる"
+  },
+  priceTrend: {
+    unknown: "未確認",
+    stable: "横ばい",
+    rising: "上昇傾向",
+    up: "上昇傾向",
+    upward: "上昇傾向",
+    falling: "下落傾向",
+    down: "下落傾向",
+    downward: "下落傾向",
+    volatile: "変動が大きい",
+    premium: "高騰傾向",
+    mixed: "販売先により異なる"
+  },
+  confidence: {
+    unknown: "未確認",
+    low: "低",
+    medium: "中",
+    high: "高",
+    very_high: "非常に高い"
+  }
+};
+
+function formatMarketResearchDisplayValue(fieldName, value) {
+  const rawValue = typeof value === "string" ? value.trim() : "";
+  if (!rawValue) return "未確認";
+
+  const normalizedValue = rawValue
+    .toLocaleLowerCase("en-US")
+    .replace(/[\s-]+/g, "_");
+  const knownLabel = MARKET_RESEARCH_DISPLAY_LABELS[fieldName]?.[normalizedValue];
+  if (knownLabel) return knownLabel;
+
+  if (fieldName === "priceTrend") {
+    const officialAndSecondaryMatch = normalizedValue.match(
+      /^official_price_around_(\d+)_secondary_market_below_official$/
+    );
+    if (officialAndSecondaryMatch) {
+      return `公式価格付近（${formatYen(Number(officialAndSecondaryMatch[1]))}）・二次流通は公式価格以下`;
+    }
+  }
+
+  if (/[^\x00-\x7F]/.test(rawValue)) {
+    return rawValue;
+  }
+
+  return "個別記述";
+}
+
+function getMarketResearchDisplayDate(marketResearch) {
+  const dateValue = marketResearch.researchMeta.researchedAt || marketResearch.importedAt;
+  return dateValue ? formatDisplayDate(dateValue) : "日付未設定";
+}
+
+function getMarketResearchCardHtml(item) {
+  const history = normalizeMarketResearchHistory(item.marketResearchHistory);
+  if (history.length === 0) return "";
+
+  const latest = history[history.length - 1];
+  const priceSummary = latest.priceSummary;
+  const availability = latest.availabilitySummary;
+  const signals = latest.marketSignals;
+  const historyRows = history
+    .slice()
+    .reverse()
+    .slice(0, 5)
+    .map((entry) => `
+      <li>
+        <span>${escapeHtml(getMarketResearchDisplayDate(entry))}</span>
+        <strong>${escapeHtml(formatMarketResearchPrice(entry.priceSummary.marketPriceTypical))}</strong>
+        <small>${escapeHtml(formatMarketResearchDisplayValue("stockStatus", entry.availabilitySummary.stockStatus))} / ${escapeHtml(formatMarketResearchDisplayValue("priceTrend", entry.marketSignals.priceTrend))}</small>
+      </li>
+    `)
+    .join("");
+
+  return `
+    <section class="market-research-card-summary" aria-label="最新のAI相場調査">
+      <div class="market-research-card-heading">
+        <span>AI相場調査</span>
+        <strong>${escapeHtml(getMarketResearchDisplayDate(latest))}</strong>
+      </div>
+      <div class="market-research-card-grid">
+        <div><span>相場中心</span><strong>${escapeHtml(formatMarketResearchPrice(priceSummary.marketPriceTypical))}</strong></div>
+        <div><span>価格帯</span><strong>${escapeHtml(`${formatMarketResearchPrice(priceSummary.marketPriceMin)} 〜 ${formatMarketResearchPrice(priceSummary.marketPriceMax)}`)}</strong></div>
+        <div><span>在庫</span><strong>${escapeHtml(formatMarketResearchDisplayValue("stockStatus", availability.stockStatus))}</strong></div>
+        <div><span>傾向</span><strong>${escapeHtml(formatMarketResearchDisplayValue("priceTrend", signals.priceTrend))}</strong></div>
+      </div>
+      ${latest.summaries.marketSummary ? `<p>${escapeHtml(latest.summaries.marketSummary)}</p>` : ""}
+      <details class="market-research-history-box">
+        <summary>相場調査履歴 ${history.length}件</summary>
+        <ul>${historyRows}</ul>
+      </details>
+    </section>
+  `;
+}
+
+function getMarketResearchPromptSchemaTemplate() {
+  const template = createDefaultMarketResearch();
+  template.sources = [createDefaultMarketResearchSource()];
+  return JSON.stringify(template, null, 2);
+}
+
+// ==============================
 // AI相場偵察（表示専用）
 // ==============================
 // 商品情報から価格調査プロンプトを組み立ててクリップボードにコピーし、
@@ -2608,7 +3334,11 @@ function promptPrice(value) {
   return number > 0 ? `${number.toLocaleString("ja-JP")}円` : "未設定";
 }
 
-function buildMarketResearchPrompt(item) {
+function buildMarketResearchPrompt(item, options = {}) {
+  const memoText = options.includeMemo === false
+    ? "（この依頼では共有しない）"
+    : promptText(item.memo);
+
   return `あなたは、コレクター向け商品の市場価格を調査するアシスタントです。
 
 以下の商品について、現在の相場、在庫状況、安く買える候補、価格を見るうえでの注意点を調べて整理してください。
@@ -2640,7 +3370,7 @@ ${promptText(item.productUrl)}
 ${promptText(item.releaseDate)}
 
 メモ：
-${promptText(item.memo)}
+${memoText}
 
 # アプリに登録している価格情報
 
@@ -2714,44 +3444,94 @@ ${promptPrice(item.maxAcceptablePrice)}
 
 ## 価格調査としての要点
 
-購入判断ではなく、価格調査として重要な点だけを箇条書きでまとめてください。`;
+購入判断ではなく、価格調査として重要な点だけを箇条書きでまとめてください。
+
+# アプリ取り込み用JSON
+
+回答の最後に、アプリ取り込み用JSONを1つだけ出力してください。
+
+条件：
+* JSONコードブロック内に出力する
+* キー名は指定スキーマから変更しない
+* 確認できない値は推測せず null または "unknown" とする
+* 価格はカンマや通貨記号を含めず数値で出力する
+* 日付は YYYY-MM-DD 形式にする
+* URLは実際に確認したページのみ記載する
+* 購入推奨、見送り推奨、趣味的価値判断は含めない
+* 市場情報、在庫状況、価格傾向、注意点、情報源を中心に整理する
+
+以下のJSONスキーマを使ってください：
+
+${getMarketResearchPromptSchemaTemplate()}`;
+}
+
+function replaceMarketResearchPromptMemo(prompt, memoText) {
+  const memoStartMarker = "\nメモ：\n";
+  const memoEndMarker = "\n\n# アプリに登録している価格情報";
+  const memoStartIndex = prompt.indexOf(memoStartMarker);
+  const memoEndIndex = prompt.indexOf(memoEndMarker, memoStartIndex + memoStartMarker.length);
+
+  if (memoStartIndex < 0 || memoEndIndex < 0) {
+    return null;
+  }
+
+  return `${prompt.slice(0, memoStartIndex + memoStartMarker.length)}${memoText}${prompt.slice(memoEndIndex)}`;
 }
 
 function copyTextToClipboard(text) {
-  let ok = false;
+  let copiedSynchronously = false;
+  let temporaryTextarea = null;
+  let textareaAppended = false;
   try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "absolute";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    ta.setSelectionRange(0, text.length); // iOS必須
-    ok = document.execCommand("copy");
-    document.body.removeChild(ta);
+    temporaryTextarea = document.createElement("textarea");
+    temporaryTextarea.value = text;
+    temporaryTextarea.setAttribute("readonly", "");
+    temporaryTextarea.style.position = "absolute";
+    temporaryTextarea.style.left = "-9999px";
+    document.body.appendChild(temporaryTextarea);
+    textareaAppended = true;
+    temporaryTextarea.select();
+    temporaryTextarea.setSelectionRange(0, text.length); // iOS必須
+    copiedSynchronously = document.execCommand("copy");
   } catch (error) {
-    ok = false;
+    copiedSynchronously = false;
+  } finally {
+    if (textareaAppended) {
+      try {
+        document.body.removeChild(temporaryTextarea);
+      } catch (error) {
+        // DOM側ですでに除去済みでもコピー結果の判定は継続する。
+      }
+    }
   }
+
+  if (copiedSynchronously) {
+    return Promise.resolve(true);
+  }
+
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).catch(() => {});
+    return navigator.clipboard.writeText(text)
+      .then(() => true)
+      .catch(() => false);
   }
-  return ok;
+
+  return Promise.resolve(false);
 }
 
-// ボタン押下ではまず確認モーダルを出す。実際のコピー＆遷移は
-// モーダル内「ChatGPTを開く」ボタンのクリック（ユーザージェスチャー）で同期実行する。
-// こうすることで、注意文を読む前に画面遷移してしまうのを防ぎつつ、
-// ポップアップブロック / iOSのクリップボード失敗も回避する。
+// ボタン押下ではまず確認モーダルを出す。コピー開始と新規タブ表示は
+// モーダル内ボタンのユーザージェスチャー中に実行し、コピー結果だけを非同期で確認する。
+// 依頼書は送信前に編集でき、メモを含めない選択もできる。
 function handleAiResearch(itemId) {
   const item = items.find((target) => target.id === itemId);
   if (!item) return;
 
-  showAiResearchConfirm(item);
+  showAiResearchConfirm(item, { source: "saved-item" });
 }
 
-function showAiResearchConfirm(item) {
+function showAiResearchConfirm(item, options = {}) {
+  const isDraftForm = options.source === "draft-form";
   const dialogId = "aiResearchConfirmDialog";
+  const previouslyFocusedElement = document.activeElement;
   const existingDialog = document.querySelector(`#${dialogId}`);
   if (existingDialog) {
     existingDialog.remove();
@@ -2763,6 +3543,25 @@ function showAiResearchConfirm(item) {
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
   dialog.setAttribute("aria-labelledby", `${dialogId}Title`);
+  const noteHtml = isDraftForm
+    ? `
+        <p>Q1の商品情報から、ChatGPTへ渡す調査依頼書を作ったニャ。</p>
+        <ul>
+          <li>まだ商品は保存されていないニャ。依頼書をコピーしても、商品登録や相場履歴の保存は行わないニャ。</li>
+          <li>アプリが自動送信することはないニャ。開いたChatGPTへ<strong>ご主人が貼り付けて送信</strong>する仕組みニャ。</li>
+          <li>回答末尾のJSONをQ2へ戻すと、市場情報と価格情報を下書きにできるニャ。</li>
+        </ul>
+        <p class="ai-research-note-sub">欲しい度・目標価格・許容上限・メモなど、ご主人の判断項目はAIに埋めさせないニャ。</p>
+      `
+    : `
+        <p>この画面では、ChatGPTへ渡す前の調査依頼書を確認・編集できるニャ。</p>
+        <ul>
+          <li>アプリが自動送信することはないニャ。依頼書をコピーしたあと、開いたChatGPTへ<strong>ご主人が貼り付けて送信</strong>する仕組みニャ。</li>
+          <li>初期状態では<strong>メモの内容も含まれる</strong>ニャ。共有したくない場合は、下のチェックを外すか依頼書を編集するニャ。</li>
+          <li>「コピーしてChatGPTを開く」では、依頼書をコピーしてからChatGPT（chatgpt.com）を新しいタブで開くニャ。</li>
+        </ul>
+        <p class="ai-research-note-sub">買うかどうかの判断は依頼しないニャ。相場・在庫・最安の偵察だけニャ。判断は評議会の仕事ニャ。</p>
+      `;
   dialog.innerHTML = `
     <section class="mode-dialog ai-research-dialog">
       <div class="section-title">
@@ -2772,45 +3571,123 @@ function showAiResearchConfirm(item) {
         </div>
       </div>
       <div class="ai-research-note">
-        <p>「ChatGPTを開く」を押すと、こうなるニャ：</p>
-        <ul>
-          <li><strong>ChatGPTのページが新しいタブで開く</strong>ニャ（chatgpt.com）。</li>
-          <li>この商品の<strong>調査依頼書をクリップボードにコピー</strong>しておくニャ。開いた先の入力欄に<strong>貼り付け（ペースト）して送信</strong>してほしいニャ。</li>
-          <li>依頼書には<strong>メモの内容も含まれる</strong>ニャ。人に見せたくない私的なメモが入っていないか、送る前に確認するニャ。</li>
-        </ul>
-        <p class="ai-research-note-sub">買うかどうかの判断は依頼しないニャ。相場・在庫・最安の偵察だけニャ。判断は評議会の仕事ニャ。</p>
+        ${noteHtml}
       </div>
+      <label class="ai-research-memo-option${isDraftForm ? " hidden" : ""}">
+        <input type="checkbox" id="${dialogId}IncludeMemo" checked>
+        <span>商品メモを依頼書に含める</span>
+      </label>
+      <label class="ai-research-preview-label" for="${dialogId}Preview">調査依頼書（送信前に編集できます）</label>
+      <textarea class="ai-research-preview" id="${dialogId}Preview" rows="10" spellcheck="false"></textarea>
       <div class="form-actions">
-        <button type="button" class="primary-button" id="${dialogId}ProceedButton">ChatGPTを開く</button>
+        <button type="button" class="primary-button" id="${dialogId}ProceedButton">コピーしてChatGPTを開く</button>
+        <button type="button" class="secondary-button" id="${dialogId}CopyButton">依頼書だけコピー</button>
         <button type="button" class="secondary-button" id="${dialogId}CancelButton">やめておく</button>
       </div>
     </section>
   `;
 
-  const closeDialog = () => dialog.remove();
+  const preview = dialog.querySelector(`#${dialogId}Preview`);
+  const includeMemoInput = dialog.querySelector(`#${dialogId}IncludeMemo`);
+  const proceedButton = dialog.querySelector(`#${dialogId}ProceedButton`);
+  const copyButton = dialog.querySelector(`#${dialogId}CopyButton`);
+  let copyInProgress = false;
+
+  includeMemoInput.checked = !isDraftForm;
+
+  const initializePreview = () => {
+    preview.value = buildMarketResearchPrompt(item, {
+      includeMemo: includeMemoInput.checked
+    });
+  };
+
+  const updatePreviewMemo = () => {
+    const memoText = includeMemoInput.checked
+      ? promptText(item.memo)
+      : "（この依頼では共有しない）";
+    const updatedPrompt = replaceMarketResearchPromptMemo(preview.value, memoText);
+
+    if (updatedPrompt === null) {
+      includeMemoInput.checked = !includeMemoInput.checked;
+      showAiToast("依頼書のメモ欄を見つけられなかったニャ。内容を直接編集してほしいニャ。");
+      return;
+    }
+
+    preview.value = updatedPrompt;
+  };
+
+  const closeDialog = () => {
+    dialog.remove();
+    if (previouslyFocusedElement && previouslyFocusedElement.isConnected) {
+      previouslyFocusedElement.focus();
+    }
+  };
+
+  const copyPreviewText = async ({ openChat }) => {
+    if (copyInProgress) return;
+    copyInProgress = true;
+    proceedButton.disabled = true;
+    copyButton.disabled = true;
+
+    const text = preview.value;
+    const copyPromise = copyTextToClipboard(text);
+
+    // 新規タブはユーザー操作中に開く。コピー結果はその後で確定する。
+    if (openChat) {
+      window.open(AI_ASSIST_CONFIG.chatUrl, "_blank", "noopener");
+    }
+
+    const copied = await copyPromise;
+    if (copied) {
+      closeDialog();
+      showAiToast(openChat
+        ? "調査依頼書をコピーしたニャ！ChatGPTに貼り付けて送るのニャ。"
+        : "調査依頼書をコピーしたニャ！使いたい場所に貼り付けるのニャ。");
+      return;
+    }
+
+    preview.focus();
+    preview.select();
+    copyInProgress = false;
+    proceedButton.disabled = false;
+    copyButton.disabled = false;
+    showAiToast("自動コピーできなかったニャ。選択された依頼書を長押ししてコピーしてニャ。");
+  };
 
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) {
       closeDialog();
     }
   });
-  dialog.querySelector(`#${dialogId}CancelButton`).addEventListener("click", closeDialog);
-  dialog.querySelector(`#${dialogId}ProceedButton`).addEventListener("click", () => {
-    // ユーザージェスチャー内で同期的にコピー→遷移する
-    const prompt = buildMarketResearchPrompt(item);
-    const copied = copyTextToClipboard(prompt);
-    window.open(AI_ASSIST_CONFIG.chatUrl, "_blank", "noopener");
-    closeDialog();
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
 
-    if (copied) {
-      showAiToast("調査依頼書をコピーしたニャ！ChatGPTに貼り付けて送るのニャ。");
-    } else {
-      showAiToast("コピーできなかったニャ…表示された依頼書を手動でコピーしてニャ。");
-      alert(prompt); // 最終フォールバック
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialog.querySelectorAll("button, input, textarea"))
+      .filter((element) => !element.disabled);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   });
+  includeMemoInput.addEventListener("change", updatePreviewMemo);
+  dialog.querySelector(`#${dialogId}CancelButton`).addEventListener("click", closeDialog);
+  copyButton.addEventListener("click", () => copyPreviewText({ openChat: false }));
+  proceedButton.addEventListener("click", () => copyPreviewText({ openChat: true }));
 
   document.body.appendChild(dialog);
+  initializePreview();
+  proceedButton.focus();
 }
 
 let aiToastTimer = null;
@@ -2835,6 +3712,517 @@ function showAiToast(message) {
   aiToastTimer = setTimeout(() => {
     toast.classList.remove("visible");
   }, 4000);
+}
+
+function renderMarketResearchMessageList(container, messages) {
+  container.textContent = "";
+  if (!Array.isArray(messages) || messages.length === 0) {
+    container.hidden = true;
+    return;
+  }
+
+  const list = document.createElement("ul");
+  messages.forEach((message) => {
+    const listItem = document.createElement("li");
+    listItem.textContent = message;
+    list.appendChild(listItem);
+  });
+  container.appendChild(list);
+  container.hidden = false;
+}
+
+function setMarketResearchPreviewText(dialog, fieldName, value) {
+  const target = dialog.querySelector(`[data-market-preview="${fieldName}"]`);
+  if (target) {
+    target.textContent = value || "未確認";
+  }
+}
+
+function renderMarketResearchImportPreview(dialog, preparedResult) {
+  const marketResearch = preparedResult.marketResearch;
+  const priceSummary = marketResearch.priceSummary;
+  const availability = marketResearch.availabilitySummary;
+  const priceRange = `${formatMarketResearchPrice(priceSummary.marketPriceMin)} 〜 ${formatMarketResearchPrice(priceSummary.marketPriceMax)}`;
+
+  setMarketResearchPreviewText(dialog, "researchedAt", marketResearch.researchMeta.researchedAt || "未設定");
+  setMarketResearchPreviewText(dialog, "productName", marketResearch.target.productName);
+  setMarketResearchPreviewText(dialog, "maker", marketResearch.target.maker || marketResearch.target.brand);
+  setMarketResearchPreviewText(dialog, "modelNumber", marketResearch.target.modelNumber);
+  setMarketResearchPreviewText(dialog, "referencePrice", formatMarketResearchPrice(marketResearch.target.referencePrice));
+  setMarketResearchPreviewText(dialog, "marketPriceTypical", formatMarketResearchPrice(priceSummary.marketPriceTypical));
+  setMarketResearchPreviewText(dialog, "priceRange", priceRange);
+  setMarketResearchPreviewText(dialog, "stockStatus", formatMarketResearchDisplayValue("stockStatus", availability.stockStatus));
+  setMarketResearchPreviewText(dialog, "supplyStatus", formatMarketResearchDisplayValue("supplyStatus", availability.supplyStatus));
+  setMarketResearchPreviewText(dialog, "priceTrend", formatMarketResearchDisplayValue("priceTrend", marketResearch.marketSignals.priceTrend));
+  setMarketResearchPreviewText(dialog, "confidence", formatMarketResearchDisplayValue("confidence", marketResearch.researchMeta.confidence));
+  setMarketResearchPreviewText(dialog, "sourceCount", `${marketResearch.sources.length}件`);
+  setMarketResearchPreviewText(dialog, "marketSummary", marketResearch.summaries.marketSummary);
+
+  const cautionsList = dialog.querySelector("[data-market-preview-cautions]");
+  cautionsList.textContent = "";
+  const cautionTexts = [
+    ...marketResearch.cautions,
+    marketResearch.summaries.cautionComment
+  ].filter((entry) => typeof entry === "string" && entry.trim());
+  if (cautionTexts.length === 0) {
+    const listItem = document.createElement("li");
+    listItem.textContent = "記載なし";
+    cautionsList.appendChild(listItem);
+  } else {
+    cautionTexts.forEach((caution) => {
+      const listItem = document.createElement("li");
+      listItem.textContent = caution;
+      cautionsList.appendChild(listItem);
+    });
+  }
+
+  const sourcesList = dialog.querySelector("[data-market-preview-sources]");
+  sourcesList.textContent = "";
+  if (marketResearch.sources.length === 0) {
+    const listItem = document.createElement("li");
+    listItem.textContent = "情報源なし";
+    sourcesList.appendChild(listItem);
+  } else {
+    marketResearch.sources.forEach((source, index) => {
+      const listItem = document.createElement("li");
+      const name = source.name || `情報源 ${index + 1}`;
+      const price = formatMarketResearchPrice(source.price);
+      const url = source.url ? ` / ${source.url}` : "";
+      const stockStatus = formatMarketResearchDisplayValue("stockStatus", source.stockStatus);
+      listItem.textContent = `${name} / ${price} / ${stockStatus}${url}`;
+      sourcesList.appendChild(listItem);
+    });
+  }
+
+  renderMarketResearchMessageList(
+    dialog.querySelector("[data-market-import-warnings]"),
+    preparedResult.warnings
+  );
+}
+
+// ==============================
+// 新規商品フォーム用 AI相場下書き
+// ==============================
+
+function createDraftItemFromFormForAiResearch() {
+  return {
+    id: "draft-form",
+    name: document.querySelector("#nameInput").value.trim(),
+    category: document.querySelector("#categoryInput").value.trim(),
+    maker: document.querySelector("#makerInput").value.trim(),
+    modelNumber: document.querySelector("#modelNumberInput").value.trim(),
+    productUrl: document.querySelector("#productUrlInput").value.trim(),
+    itemType: document.querySelector("#itemTypeInput").value || "不明",
+    releaseDate: document.querySelector("#releaseDateInput").value || "",
+    priceBasisType: document.querySelector("#priceBasisTypeInput").value || DEFAULT_PRICE_BASIS_TYPE,
+    listPrice: toNumber(document.querySelector("#listPriceInput").value),
+    registeredPrice: toNumber(document.querySelector("#registeredPriceInput").value),
+    currentPrice: toNumber(document.querySelector("#registeredPriceInput").value),
+    targetPrice: toNumber(document.querySelector("#targetPriceInput").value),
+    maxAcceptablePrice: toNumber(document.querySelector("#maxAcceptablePriceInput").value),
+    memo: "",
+    marketResearchHistory: []
+  };
+}
+
+function isEditingItemForm() {
+  return Boolean(document.querySelector("#editingItemId").value);
+}
+
+function showDraftMarketResearchPanel() {
+  if (isEditingItemForm()) {
+    renderDraftMarketResearchUiState();
+    showAiToast("既存商品の編集ではAI下書き作成は使わないニャ。商品カード側から相場調査を追加してニャ。");
+    return false;
+  }
+
+  document.querySelector("#marketDraftAiPanel").classList.remove("hidden");
+  return true;
+}
+
+function handleDraftAiResearch() {
+  const draftItem = createDraftItemFromFormForAiResearch();
+  if (!draftItem.name) {
+    showAiToast("まずはQ1で商品名を教えてニャ。名前がないと、市場へ偵察に出られないニャ。");
+    document.querySelector("#nameInput").focus();
+    return;
+  }
+
+  if (!showDraftMarketResearchPanel()) return;
+  showAiResearchConfirm(draftItem, { source: "draft-form" });
+}
+
+function prepareDraftMarketResearchImport(inputText) {
+  return prepareMarketResearchImport(createDraftItemFromFormForAiResearch(), inputText);
+}
+
+function getPositiveMarketResearchPrice(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function getDraftListPriceFromMarketResearch(marketResearch) {
+  const prices = [
+    marketResearch.target.referencePrice,
+    marketResearch.priceSummary.officialPrice,
+    marketResearch.priceSummary.marketPriceTypical,
+    marketResearch.priceSummary.usedPriceTypical
+  ];
+  return prices.map(getPositiveMarketResearchPrice).find((price) => price > 0) || 0;
+}
+
+function getDraftRegisteredPriceFromMarketResearch(marketResearch) {
+  const typicalPrice = getPositiveMarketResearchPrice(marketResearch.priceSummary.marketPriceTypical);
+  if (typicalPrice > 0) return typicalPrice;
+
+  const usedTypicalPrice = getPositiveMarketResearchPrice(marketResearch.priceSummary.usedPriceTypical);
+  if (usedTypicalPrice > 0) return usedTypicalPrice;
+
+  const minimumPrice = getPositiveMarketResearchPrice(marketResearch.priceSummary.marketPriceMin);
+  if (minimumPrice > 0) return minimumPrice;
+
+  const sourcePrices = marketResearch.sources
+    .map((source) => getPositiveMarketResearchPrice(source.price))
+    .filter((price) => price > 0);
+  return sourcePrices.length > 0 ? Math.min(...sourcePrices) : 0;
+}
+
+function getDraftPriceBasisTypeFromMarketResearch(marketResearch) {
+  const referencePrice = getPositiveMarketResearchPrice(marketResearch.target.referencePrice);
+  const officialPrice = getPositiveMarketResearchPrice(marketResearch.priceSummary.officialPrice);
+  const marketTypical = getPositiveMarketResearchPrice(marketResearch.priceSummary.marketPriceTypical);
+  const usedTypical = getPositiveMarketResearchPrice(marketResearch.priceSummary.usedPriceTypical);
+
+  if (referencePrice > 0 || officialPrice > 0) return "定価を基準にする";
+  if (usedTypical > 0 && marketTypical <= 0) return "中古相場を基準にする";
+  if (marketTypical > 0) return "参考相場を基準にする";
+  return UNKNOWN_PRICE_BASIS_TYPE;
+}
+
+function normalizeMarketResearchStatusValue(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[\s-]+/g, "_");
+}
+
+function mapMarketResearchToItemType(marketResearch) {
+  const statuses = [
+    marketResearch.availabilitySummary.stockStatus,
+    marketResearch.availabilitySummary.supplyStatus,
+    marketResearch.availabilitySummary.availability
+  ].map(normalizeMarketResearchStatusValue);
+  const includesAny = (candidates) => candidates.some((candidate) => statuses.includes(candidate));
+
+  if (includesAny(["discontinued", "ended"])) return "廃盤・終売";
+  if (includesAny(["preorder", "pre_order"])) return "予約・発売前";
+  if (includesAny(["low_stock", "limited_stock", "scarce", "out_of_stock", "sold_out"])) {
+    return "品薄・売り切れ気味";
+  }
+  if (includesAny(["available", "in_stock", "stocked", "normal", "regular", "regular_sale"])) {
+    return "通常販売中";
+  }
+  return "不明";
+}
+
+function setDraftFormTextValue(selector, value) {
+  if (typeof value !== "string" || !value.trim()) return;
+  document.querySelector(selector).value = value.trim();
+}
+
+function applyMarketResearchDraftToForm(marketResearch) {
+  const target = marketResearch.target;
+  setDraftFormTextValue("#nameInput", target.productName);
+  setDraftFormTextValue("#categoryInput", target.category);
+  setDraftFormTextValue("#makerInput", target.maker || target.brand);
+  setDraftFormTextValue("#modelNumberInput", target.modelNumber);
+  setDraftFormTextValue("#productUrlInput", target.productUrl);
+  setDraftFormTextValue("#releaseDateInput", target.releaseDate);
+
+  document.querySelector("#itemTypeInput").value = mapMarketResearchToItemType(marketResearch);
+  document.querySelector("#priceBasisTypeInput").value = getDraftPriceBasisTypeFromMarketResearch(marketResearch);
+
+  const listPrice = getDraftListPriceFromMarketResearch(marketResearch);
+  const registeredPrice = getDraftRegisteredPriceFromMarketResearch(marketResearch);
+  document.querySelector("#listPriceInput").value = listPrice > 0 ? String(listPrice) : "";
+  document.querySelector("#registeredPriceInput").value = registeredPrice > 0 ? String(registeredPrice) : "";
+
+  refreshItemFormAfterMarketDraftApplied();
+}
+
+function refreshItemFormAfterMarketDraftApplied() {
+  updateCurrentPriceField();
+  updatePriceBasisField();
+  renderFormPriceStatus();
+  updateLegoReleaseDateField();
+}
+
+function hideDraftMarketResearchPreview() {
+  preparedDraftMarketResearch = null;
+  document.querySelector("#draftMarketResearchPreview").classList.add("hidden");
+  document.querySelector("#draftMarketResearchInput").focus();
+}
+
+function closeDraftMarketResearchPanel() {
+  preparedDraftMarketResearch = null;
+  document.querySelector("#draftMarketResearchPreview").classList.add("hidden");
+  document.querySelector("#marketDraftAiPanel").classList.add("hidden");
+}
+
+function handleDraftMarketResearchReview() {
+  if (!showDraftMarketResearchPanel()) return;
+
+  const inputText = document.querySelector("#draftMarketResearchInput").value;
+  const result = prepareDraftMarketResearchImport(inputText);
+  renderMarketResearchMessageList(document.querySelector("#draftMarketResearchErrors"), result.errors);
+  renderMarketResearchMessageList(
+    document.querySelector("#draftMarketResearchParseWarnings"),
+    result.ok ? [] : result.warnings
+  );
+
+  if (!result.ok) {
+    preparedDraftMarketResearch = null;
+    document.querySelector("#draftMarketResearchPreview").classList.add("hidden");
+    document.querySelector("#draftMarketResearchInput").focus();
+    return;
+  }
+
+  preparedDraftMarketResearch = result.marketResearch;
+  const preview = document.querySelector("#draftMarketResearchPreview");
+  renderMarketResearchImportPreview(preview, result);
+  preview.classList.remove("hidden");
+  const applyButton = document.querySelector("#draftMarketResearchApplyButton");
+  applyButton.textContent = result.warnings.length > 0
+    ? "警告を確認して下書きに反映する"
+    : "フォームの下書きに反映する";
+  applyButton.focus();
+}
+
+function applyPreparedDraftMarketResearch() {
+  if (!preparedDraftMarketResearch || isEditingItemForm()) return;
+
+  const confirmed = confirm(
+    "AIの調査結果をフォームへ反映するニャ。\n\n" +
+    "商品名・メーカー・型番・URL・販売状態・発売日・価格などの客観情報が上書きされる場合があるニャ。\n" +
+    "欲しい度・目標価格・許容上限・メモなど、ご主人の判断項目は上書きしないニャ。\n\n" +
+    "反映してよいかニャ？"
+  );
+  if (!confirmed) return;
+
+  const importedAt = new Date().toISOString();
+  const normalizedResearch = mergeWithDefaultMarketResearch(preparedDraftMarketResearch);
+  applyMarketResearchDraftToForm(normalizedResearch);
+  pendingDraftMarketResearch = {
+    ...normalizedResearch,
+    importedAt: normalizedResearch.importedAt || importedAt,
+    importSource: normalizedResearch.importSource || MARKET_RESEARCH_MANUAL_IMPORT_SOURCE
+  };
+  preparedDraftMarketResearch = null;
+  renderDraftMarketResearchUiState();
+  showAiToast("市場の偵察結果を下書きに反映したニャ。次は内容を確認しながら進めるニャ。");
+  setItemFormWizardStep(3);
+}
+
+function renderDraftMarketResearchUiState() {
+  const choicePanel = document.querySelector("#marketDraftChoicePanel");
+  const aiPanel = document.querySelector("#marketDraftAiPanel");
+  const editNotice = document.querySelector("#marketDraftEditNotice");
+  const pendingBadge = document.querySelector("#marketDraftPendingBadge");
+  if (!choicePanel || !aiPanel || !editNotice || !pendingBadge) return;
+
+  const isEditing = isEditingItemForm();
+  choicePanel.classList.toggle("hidden", isEditing);
+  editNotice.classList.toggle("hidden", !isEditing);
+  if (isEditing) aiPanel.classList.add("hidden");
+  pendingBadge.classList.toggle("hidden", !pendingDraftMarketResearch);
+}
+
+function clearPendingDraftMarketResearch() {
+  pendingDraftMarketResearch = null;
+  preparedDraftMarketResearch = null;
+
+  const input = document.querySelector("#draftMarketResearchInput");
+  if (input) input.value = "";
+  const aiPanel = document.querySelector("#marketDraftAiPanel");
+  if (aiPanel) aiPanel.classList.add("hidden");
+  const preview = document.querySelector("#draftMarketResearchPreview");
+  if (preview) preview.classList.add("hidden");
+  const errors = document.querySelector("#draftMarketResearchErrors");
+  if (errors) renderMarketResearchMessageList(errors, []);
+  const warnings = document.querySelector("#draftMarketResearchParseWarnings");
+  if (warnings) renderMarketResearchMessageList(warnings, []);
+  renderDraftMarketResearchUiState();
+}
+
+function openMarketResearchImportDialog(itemId) {
+  const item = items.find((entry) => entry.id === itemId);
+  if (!item) return;
+
+  const dialogId = "marketResearchImportDialog";
+  const previouslyFocusedElement = document.activeElement;
+  const existingDialog = document.querySelector(`#${dialogId}`);
+  if (existingDialog) existingDialog.remove();
+
+  const dialog = document.createElement("div");
+  dialog.id = dialogId;
+  dialog.className = "dialog-backdrop";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", `${dialogId}Title`);
+  dialog.innerHTML = `
+    <section class="mode-dialog market-research-import-dialog">
+      <div class="section-title">
+        <div>
+          <p class="panel-eyebrow">MARKET DATA IMPORT</p>
+          <h2 id="${dialogId}Title">AI相場調査JSONを取り込む</h2>
+          <p>対象商品：<strong data-market-import-item-name></strong></p>
+        </div>
+      </div>
+
+      <div data-market-import-paste-stage>
+        <label class="market-research-import-label" for="${dialogId}Textarea">
+          <span>AI相場調査JSONを貼り付け</span>
+          <small>JSONだけでなく、JSONコードブロックやChatGPT回答全体も読み取れます。</small>
+        </label>
+        <textarea id="${dialogId}Textarea" class="market-research-import-textarea" rows="12" spellcheck="false" placeholder="ここにAIの回答またはJSONを貼り付けてください"></textarea>
+        <div class="market-research-import-errors" data-market-import-errors role="alert" hidden></div>
+        <div class="market-research-import-warnings" data-market-import-parse-warnings hidden></div>
+        <div class="form-actions market-research-import-actions">
+          <button type="button" class="primary-button" data-market-import-review>内容を確認</button>
+          <button type="button" class="secondary-button" data-market-import-close>閉じる</button>
+        </div>
+      </div>
+
+      <div data-market-import-preview-stage hidden>
+        <h3 class="market-research-preview-title">取り込み内容の確認</h3>
+        <div class="market-research-import-warnings" data-market-import-warnings hidden></div>
+        <dl class="market-research-preview-grid">
+          <div><dt>調査日</dt><dd data-market-preview="researchedAt"></dd></div>
+          <div><dt>商品名</dt><dd data-market-preview="productName"></dd></div>
+          <div><dt>メーカー</dt><dd data-market-preview="maker"></dd></div>
+          <div><dt>型番</dt><dd data-market-preview="modelNumber"></dd></div>
+          <div><dt>基準価格</dt><dd data-market-preview="referencePrice"></dd></div>
+          <div><dt>相場中心価格</dt><dd data-market-preview="marketPriceTypical"></dd></div>
+          <div><dt>価格帯</dt><dd data-market-preview="priceRange"></dd></div>
+          <div><dt>在庫状況</dt><dd data-market-preview="stockStatus"></dd></div>
+          <div><dt>供給状況</dt><dd data-market-preview="supplyStatus"></dd></div>
+          <div><dt>価格傾向</dt><dd data-market-preview="priceTrend"></dd></div>
+          <div><dt>信頼度</dt><dd data-market-preview="confidence"></dd></div>
+          <div><dt>情報源</dt><dd data-market-preview="sourceCount"></dd></div>
+        </dl>
+        <section class="market-research-preview-section">
+          <h4>市場コメント</h4>
+          <p data-market-preview="marketSummary"></p>
+        </section>
+        <section class="market-research-preview-section">
+          <h4>注意点</h4>
+          <ul data-market-preview-cautions></ul>
+        </section>
+        <details class="market-research-preview-section market-research-source-preview">
+          <summary>情報源を確認</summary>
+          <ul data-market-preview-sources></ul>
+        </details>
+        <div class="form-actions market-research-import-actions">
+          <button type="button" class="primary-button" data-market-import-save>この商品に保存</button>
+          <button type="button" class="secondary-button" data-market-import-back>貼り付けに戻る</button>
+          <button type="button" class="secondary-button" data-market-import-close>キャンセル</button>
+        </div>
+      </div>
+    </section>
+  `;
+
+  const pasteStage = dialog.querySelector("[data-market-import-paste-stage]");
+  const previewStage = dialog.querySelector("[data-market-import-preview-stage]");
+  const textarea = dialog.querySelector(`#${dialogId}Textarea`);
+  const reviewButton = dialog.querySelector("[data-market-import-review]");
+  const saveButton = dialog.querySelector("[data-market-import-save]");
+  const errorContainer = dialog.querySelector("[data-market-import-errors]");
+  let preparedResearch = null;
+  let saveInProgress = false;
+
+  dialog.querySelector("[data-market-import-item-name]").textContent = item.name;
+
+  const closeDialog = () => {
+    dialog.remove();
+    if (previouslyFocusedElement && previouslyFocusedElement.isConnected) {
+      previouslyFocusedElement.focus();
+    }
+  };
+
+  const showPasteStage = () => {
+    preparedResearch = null;
+    pasteStage.hidden = false;
+    previewStage.hidden = true;
+    textarea.focus();
+  };
+
+  const showPreviewStage = () => {
+    const result = prepareMarketResearchImport(item, textarea.value);
+    renderMarketResearchMessageList(errorContainer, result.errors);
+    renderMarketResearchMessageList(
+      dialog.querySelector("[data-market-import-parse-warnings]"),
+      result.ok ? [] : result.warnings
+    );
+    if (!result.ok) {
+      preparedResearch = null;
+      textarea.focus();
+      return;
+    }
+
+    preparedResearch = result.marketResearch;
+    renderMarketResearchImportPreview(dialog, result);
+    pasteStage.hidden = true;
+    previewStage.hidden = false;
+    saveButton.focus();
+  };
+
+  const savePreparedResearch = () => {
+    if (!preparedResearch || saveInProgress) return;
+    saveInProgress = true;
+    saveButton.disabled = true;
+    const saveResult = saveMarketResearchToItem(itemId, preparedResearch);
+    if (!saveResult.ok) {
+      saveInProgress = false;
+      saveButton.disabled = false;
+      showAiToast("対象商品が見つからず、相場調査結果を保存できませんでした。");
+      return;
+    }
+
+    closeDialog();
+    showAiToast("AI相場調査結果を保存しました。");
+  };
+
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closeDialog();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialog.querySelectorAll("button, textarea, summary, [href], input, select, [tabindex]:not([tabindex='-1'])"))
+      .filter((element) => !element.disabled && !element.closest("[hidden]"));
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  dialog.querySelectorAll("[data-market-import-close]").forEach((button) => {
+    button.addEventListener("click", closeDialog);
+  });
+  reviewButton.addEventListener("click", showPreviewStage);
+  saveButton.addEventListener("click", savePreparedResearch);
+  dialog.querySelector("[data-market-import-back]").addEventListener("click", showPasteStage);
+
+  document.body.appendChild(dialog);
+  textarea.focus();
 }
 
 // ==============================
@@ -2913,7 +4301,8 @@ function getShopLinksHtml(item) {
 
   return `
     <div class="shop-links" aria-label="相場をしらべる">
-      <button type="button" class="shop-link-button shop-ai" data-action="ai-research" data-id="${item.id}">🐱 AIで相場を偵察</button>
+      <button type="button" class="shop-link-button shop-ai" data-action="ai-research" data-id="${escapeHtml(item.id)}">🐱 AIで相場を偵察</button>
+      <button type="button" class="shop-link-button shop-market-import" data-action="ai-market-import" data-id="${escapeHtml(item.id)}">📥 AI相場調査JSONを取り込む</button>
       ${getProductUrlLinkHtml(item)}
       <div class="shop-search-row">
         <span class="pr-chip" title="アフィリエイトリンク（PR）を含みます">PR</span>
@@ -2949,11 +4338,16 @@ function createItemCard(item) {
     ? `見送り日：${formatDateTime(item.skippedAt)}`
     : "";
   const actionButtonsHtml = getItemActionButtonsHtml(item);
+  const marketActionsHtml = getShopLinksHtml(item);
+  const marketResearchCardHtml = getMarketResearchCardHtml(item);
 
-  const primaryVerdictLabel = item.purchased ? "購入後判決" : "推奨";
+  const hasValidJudgment = VALID_JUDGMENTS.includes(item.judgment);
+  const primaryVerdictLabel = item.purchased
+    ? "購入後判決"
+    : (hasValidJudgment ? "推奨" : "審議状況");
   const primaryVerdictText = item.purchased
     ? item.purchaseJudgment || "購入済み"
-    : getRecommendedAction(item.judgment || "見送り");
+    : (hasValidJudgment ? getRecommendedAction(item.judgment) : "まだ審議していません");
 
   card.innerHTML = `
     <details class="item-card-details"${openItemCardIds.has(item.id) ? " open" : ""}>
@@ -2989,6 +4383,7 @@ function createItemCard(item) {
           <div><span>ブレーキ</span><strong>${item.brakeScore || "-"}</strong></div>
         </div>
 
+        ${marketResearchCardHtml}
         <div class="comment-box">${escapeHtml(comment)}</div>
         ${historyHtml}
         ${item.memo ? `<p class="memo">${escapeHtml(item.memo)}</p>` : ""}
@@ -2997,13 +4392,13 @@ function createItemCard(item) {
         ${priceDifference ? `<p class="memo">${escapeHtml(priceDifference)}</p>` : ""}
         ${skippedStockText ? `<p class="memo">${escapeHtml(skippedStockText)}</p>` : ""}
         ${reversedHeartStockText ? `<p class="memo">${escapeHtml(reversedHeartStockText)}</p>` : ""}
-        ${getShopLinksHtml(item)}
 
         <div class="card-actions">
           ${actionButtonsHtml}
         </div>
       </div>
     </details>
+    ${marketActionsHtml}
   `;
 
   const details = card.querySelector(".item-card-details");
@@ -3019,9 +4414,10 @@ function createItemCard(item) {
 }
 
 function getItemActionButtonsHtml(item) {
+  const safeItemId = escapeHtml(item.id);
   const commonButtons = `
-    <button class="secondary-button" data-action="edit" data-id="${item.id}">編集</button>
-    <button class="danger-button" data-action="delete" data-id="${item.id}">削除</button>
+    <button type="button" class="secondary-button" data-action="edit" data-id="${safeItemId}">編集</button>
+    <button type="button" class="danger-button" data-action="delete" data-id="${safeItemId}">削除</button>
   `;
 
   if (item.purchased) {
@@ -3030,17 +4426,17 @@ function getItemActionButtonsHtml(item) {
 
   if (item.skipped) {
     return `
-      <button class="secondary-button" data-action="purchase" data-id="${item.id}">後から買った</button>
-      <button class="secondary-button" data-action="undo-skip" data-id="${item.id}">見送りを取り消す</button>
+      <button type="button" class="secondary-button" data-action="purchase" data-id="${safeItemId}">後から買った</button>
+      <button type="button" class="secondary-button" data-action="undo-skip" data-id="${safeItemId}">見送りを取り消す</button>
       ${commonButtons}
     `;
   }
 
   return `
-    <button class="primary-button" data-action="judge" data-id="${item.id}">審議する</button>
+    <button type="button" class="primary-button" data-action="judge" data-id="${safeItemId}">審議する</button>
     ${commonButtons}
-    <button class="secondary-button" data-action="purchase" data-id="${item.id}">買った</button>
-    <button class="secondary-button" data-action="skip" data-id="${item.id}">見送った</button>
+    <button type="button" class="secondary-button" data-action="purchase" data-id="${safeItemId}">買った</button>
+    <button type="button" class="secondary-button" data-action="skip" data-id="${safeItemId}">見送った</button>
   `;
 }
 
@@ -3172,6 +4568,13 @@ function setupEvents() {
   document.querySelector("#listPriceInput").addEventListener("input", renderFormPriceStatus);
   document.querySelector("#registeredPriceInput").addEventListener("input", handleRegisteredPriceInput);
   document.querySelector("#currentPriceInput").addEventListener("input", renderFormPriceStatus);
+  document.querySelector("#draftAiRouteButton").addEventListener("click", handleDraftAiResearch);
+  document.querySelector("#draftManualRouteButton").addEventListener("click", () => setItemFormWizardStep(3));
+  document.querySelector("#draftAiPromptButton").addEventListener("click", handleDraftAiResearch);
+  document.querySelector("#draftMarketResearchReviewButton").addEventListener("click", handleDraftMarketResearchReview);
+  document.querySelector("#draftMarketResearchApplyButton").addEventListener("click", applyPreparedDraftMarketResearch);
+  document.querySelector("#draftMarketResearchBackButton").addEventListener("click", hideDraftMarketResearchPreview);
+  document.querySelector("#draftMarketResearchCloseButton").addEventListener("click", closeDraftMarketResearchPanel);
 
   scoreInputIds.forEach((id) => {
     const input = document.querySelector(`#${id}`);
@@ -3308,13 +4711,23 @@ function handleItemSubmit(event) {
   } else {
     const newItemId = generateId();
     formItem.currentPrice = formItem.registeredPrice;
+    const initialMarketResearchHistory = pendingDraftMarketResearch
+      ? [{
+        ...mergeWithDefaultMarketResearch(pendingDraftMarketResearch),
+        importedAt: pendingDraftMarketResearch.importedAt || now,
+        importSource: pendingDraftMarketResearch.importSource || MARKET_RESEARCH_MANUAL_IMPORT_SOURCE
+      }]
+      : [];
     items.push({
       ...createEmptyItem(),
       ...formItem,
       id: newItemId,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      marketResearchHistory: initialMarketResearchHistory
     });
+    pendingDraftMarketResearch = null;
+    preparedDraftMarketResearch = null;
     lastAddedItemId = newItemId;
   }
 
@@ -3381,6 +4794,9 @@ function handleItemAction(event) {
       return;
     case "ai-research":
       handleAiResearch(itemId);
+      return;
+    case "ai-market-import":
+      openMarketResearchImportDialog(itemId);
       return;
     default:
       return;
@@ -3502,6 +4918,7 @@ function startEditItem(itemId) {
   renderTabs();
   document.querySelector("#itemFormTitle").textContent = "商品編集";
   document.querySelector("#editingItemId").value = item.id;
+  clearPendingDraftMarketResearch();
   document.querySelector("#nameInput").value = item.name;
   document.querySelector("#categoryInput").value = item.category;
   document.querySelector("#makerInput").value = item.maker || "";
@@ -3533,6 +4950,7 @@ function startEditItem(itemId) {
   updatePriceBasisField();
   renderFormPriceStatus();
   updateLegoReleaseDateField();
+  renderDraftMarketResearchUiState();
   showItemFormWizardAllMode();
   document.querySelector("#itemForm").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -3972,7 +5390,8 @@ function createEmptyItem() {
     skipped: false,
     skippedAt: "",
     stockAddedAmount: 0,
-    judgmentHistory: []
+    judgmentHistory: [],
+    marketResearchHistory: []
   };
 }
 
@@ -3980,6 +5399,7 @@ function resetItemForm() {
   document.querySelector("#itemForm").reset();
   document.querySelector("#itemFormTitle").textContent = "商品登録";
   document.querySelector("#editingItemId").value = "";
+  clearPendingDraftMarketResearch();
   itemFormReturnTab = "considering";
   hideItemAddedPanel();
   document.querySelector("#itemTypeInput").value = DEFAULT_ITEM_TYPE;
@@ -4003,7 +5423,7 @@ function resetItemForm() {
 // フォーム値の読み取り・検証・保存は従来どおり handleItemSubmit /
 // getItemFromForm / validateItemForm が行い、ここからは触れない。
 
-const ITEM_FORM_WIZARD_TOTAL_STEPS = 7;
+const ITEM_FORM_WIZARD_TOTAL_STEPS = 8;
 let itemFormWizardStep = 1;
 let itemFormWizardMode = "wizard";
 
@@ -4013,12 +5433,15 @@ function getWizardQuestionText(step) {
   const itemLabel = enteredName ? `「${enteredName}」` : "その品";
   const questions = {
     1: "ようこそだニャ、ご主人。今日はどんな品を評議会へ持ち込むのかニャ？",
-    2: `ふむふむ、${itemLabel}だニャ。いま市場では、どんな売られ方をしてるのかニャ？`,
-    3: "次はお金の話だニャ。数字は正直に頼むニャ。審議の土台になるのだニャ。",
-    4: `作戦会議だニャ。${itemLabel}、いくらで狙って、いくらまでなら許せるかニャ？`,
-    5: "ここからは心のアクセルを測るニャ。見栄を張っても評議会は誤魔化せないニャ。",
-    6: "今度は理性のブレーキだニャ。目を逸らしちゃダメだニャ。",
-    7: "最後に言い残したことはあるかニャ？よければこのまま評議会へ提出するニャ！"
+    2: enteredName
+      ? `ふむふむ、${itemLabel}だニャ。この品の市場情報、どうやって集めるかニャ？`
+      : "この品の市場情報、どうやって集めるかニャ？",
+    3: `それじゃあ、${itemLabel}がいま市場ではどんな売られ方をしているか教えてニャ。`,
+    4: "次はお金の話だニャ。数字は正直に頼むニャ。審議の土台になるのだニャ。",
+    5: `作戦会議だニャ。${itemLabel}、いくらで狙って、いくらまでなら許せるかニャ？`,
+    6: "ここからは心のアクセルを測るニャ。見栄を張っても評議会は誤魔化せないニャ。",
+    7: "今度は理性のブレーキだニャ。目を逸らしちゃダメだニャ。",
+    8: "最後に言い残したことはあるかニャ？よければこのまま評議会へ提出するニャ！"
   };
   return questions[step] || questions[1];
 }
@@ -4082,6 +5505,7 @@ function renderItemFormWizard() {
 
   const isWizard = itemFormWizardMode === "wizard";
   const isLastStep = itemFormWizardStep >= ITEM_FORM_WIZARD_TOTAL_STEPS;
+  const isMarketRouteStep = isWizard && itemFormWizardStep === 2;
 
   form.classList.toggle("wizard-mode", isWizard);
   form.querySelectorAll(".wizard-step").forEach((step) => {
@@ -4091,7 +5515,7 @@ function renderItemFormWizard() {
 
   nav.classList.toggle("hidden", !isWizard);
   document.querySelector("#wizardBackButton").disabled = itemFormWizardStep <= 1;
-  document.querySelector("#wizardNextButton").classList.toggle("hidden", isLastStep);
+  document.querySelector("#wizardNextButton").classList.toggle("hidden", isLastStep || isMarketRouteStep);
   document.querySelector("#itemFormActions").classList.toggle("hidden", isWizard && !isLastStep);
   document.querySelector("#wizardModeToggleButton").textContent = isWizard
     ? "一覧形式でまとめて入力する"
@@ -4117,6 +5541,8 @@ function renderItemFormWizard() {
     label.textContent = `Q${itemFormWizardStep} / ${ITEM_FORM_WIZARD_TOTAL_STEPS}`;
     progress.appendChild(label);
   }
+
+  renderDraftMarketResearchUiState();
 }
 
 function getTabNameForItem(item) {
@@ -4775,4 +6201,3 @@ loadData();
 setupEvents();
 setupItemFormWizard();
 renderAll();
-

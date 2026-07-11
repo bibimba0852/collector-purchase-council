@@ -111,7 +111,7 @@
             <p class="panel-eyebrow">COUNCIL LOG</p>
             <h2>最近の審議履歴</h2>
           </div>
-          <p>直近の購入前審議と購入後評議会を確認できます。</p>
+          <p>直近の購入前審議、購入後評議会、見送り確定を確認できます。</p>
         </div>
         <div id="recentHistoryList" class="recent-history-list"></div>
         <p id="recentHistoryEmpty" class="empty-state">まだ審議履歴がありません。</p>
@@ -188,7 +188,7 @@
       <div class="settings-tools">
         <h3 class="settings-block-title">外部リンクとPR表記について</h3>
         <p>商品カードの「Amazonで探す」「楽天で探す」「価格.comで探す」は、商品名（入力されていればメーカー・型番も）を検索キーワードとして各サイトを開く外部リンクです。このうちAmazon・楽天のリンクにはアフィリエイトリンク（PR）が含まれることがあり、リンク先での購入により開発者に紹介料が支払われる場合があります。価格.comのリンクは通常の検索リンクです。検索リンクでは、その検索キーワード以外のアプリ内データ（価格・スコア・審議履歴など）は外部に送信されません。</p>
-        <p>「🐱 AIで相場を偵察」ボタンは、選んだ商品の <strong>商品名・メーカー・型番・カテゴリ・販売状態・発売日・商品URL・メモ・各価格情報</strong> を、相場調査を依頼するプロンプトとしてクリップボードにコピーし、ChatGPT（chatgpt.com）を開きます。<strong>メモも送信対象に含まれます</strong>。送信されるのはボタンを押したその商品の情報だけで、他の商品や審議履歴は送信されません。買うかどうかの判断はプロンプトで依頼せず、アプリの評議会に残しています。</p>
+        <p>「🐱 AIで相場を偵察」ボタンは、選んだ商品の <strong>商品名・メーカー・型番・カテゴリ・販売状態・発売日・商品URL・メモ・各価格情報</strong> から相場調査用の依頼書を作り、確認画面を表示します。アプリが情報を自動送信することはありません。内容を確認・編集してクリップボードへコピーし、必要な場合だけChatGPT（chatgpt.com）へ自分で貼り付けて送信します。初期状態ではメモも含まれますが、確認画面で除外できます。ほかの商品や審議履歴は依頼書に含めません。買うかどうかの判断はAIへ依頼せず、アプリの評議会に残しています。</p>
       </div>
     </section>
     </section>
@@ -309,7 +309,96 @@
         </fieldset>
 
         <fieldset class="wizard-step" data-wizard-step="2">
-          <legend class="wizard-step-title"><span class="wizard-step-tag">Q2</span>市場での状況</legend>
+          <legend class="wizard-step-title"><span class="wizard-step-tag">Q2</span>市場情報、どうするニャ？</legend>
+          <div id="marketDraftChoicePanel" class="market-draft-choice-grid">
+            <article class="market-draft-choice market-draft-choice-ai">
+              <p class="market-draft-choice-icon" aria-hidden="true">🐱</p>
+              <div>
+                <h3>AIに市場を偵察してもらう</h3>
+                <p>商品名・メーカー・型番・URLから調査依頼書を作るニャ。返ってきたJSONは、販売状態・発売日・価格・相場履歴の下書きにできるニャ。</p>
+                <small>アプリが自動送信・自動登録することはないニャ。内容を確認してから使えるニャ。</small>
+              </div>
+              <button type="button" id="draftAiRouteButton" class="primary-button">AIで市場を偵察する</button>
+            </article>
+            <article class="market-draft-choice">
+              <p class="market-draft-choice-icon" aria-hidden="true">✍️</p>
+              <div>
+                <h3>自分で市場情報を入力する</h3>
+                <p>定価・現在価格・販売状態が分かっているなら、いつも通り手入力で進めるニャ。</p>
+                <small>AIを使わず、そのまま市場と価格の質問へ進めるニャ。</small>
+              </div>
+              <button type="button" id="draftManualRouteButton" class="secondary-button">自分で入力する</button>
+            </article>
+          </div>
+
+          <section id="marketDraftAiPanel" class="market-draft-ai-panel hidden" aria-labelledby="marketDraftAiPanelTitle">
+            <div class="market-draft-ai-heading">
+              <div>
+                <p class="panel-eyebrow">AI DRAFT ASSIST</p>
+                <h3 id="marketDraftAiPanelTitle">偵察結果JSONを戻すニャ</h3>
+              </div>
+              <span id="marketDraftPendingBadge" class="market-draft-pending-badge hidden">下書き反映済み</span>
+            </div>
+            <p>ChatGPTの回答末尾にあるJSONを貼り付けると、市場情報と価格情報をフォームへ下書き反映するニャ。</p>
+            <div class="form-actions market-draft-prompt-actions">
+              <button type="button" id="draftAiPromptButton" class="secondary-button">調査依頼書をもう一度確認する</button>
+            </div>
+            <label class="market-research-import-label" for="draftMarketResearchInput">
+              <span>AI相場調査JSONを貼り付け</span>
+              <small>JSON単体、JSONコードブロック、ChatGPT回答全体に対応しています。</small>
+            </label>
+            <textarea id="draftMarketResearchInput" class="market-research-import-textarea market-draft-textarea" rows="10" spellcheck="false" placeholder="ここにAIの回答またはJSONを貼り付けてください"></textarea>
+            <div id="draftMarketResearchErrors" class="market-research-import-errors" role="alert" hidden></div>
+            <div id="draftMarketResearchParseWarnings" class="market-research-import-warnings" hidden></div>
+            <div class="form-actions market-draft-review-actions">
+              <button type="button" id="draftMarketResearchReviewButton" class="primary-button">内容を確認</button>
+              <button type="button" id="draftMarketResearchCloseButton" class="secondary-button">AI支援を閉じる</button>
+            </div>
+
+            <section id="draftMarketResearchPreview" class="market-draft-preview hidden" aria-labelledby="draftMarketResearchPreviewTitle">
+              <h3 id="draftMarketResearchPreviewTitle" class="market-research-preview-title">下書き内容の確認</h3>
+              <div class="market-research-import-warnings" data-market-import-warnings hidden></div>
+              <dl class="market-research-preview-grid">
+                <div><dt>調査日</dt><dd data-market-preview="researchedAt"></dd></div>
+                <div><dt>商品名</dt><dd data-market-preview="productName"></dd></div>
+                <div><dt>メーカー</dt><dd data-market-preview="maker"></dd></div>
+                <div><dt>型番</dt><dd data-market-preview="modelNumber"></dd></div>
+                <div><dt>基準価格</dt><dd data-market-preview="referencePrice"></dd></div>
+                <div><dt>相場中心価格</dt><dd data-market-preview="marketPriceTypical"></dd></div>
+                <div><dt>価格帯</dt><dd data-market-preview="priceRange"></dd></div>
+                <div><dt>在庫状況</dt><dd data-market-preview="stockStatus"></dd></div>
+                <div><dt>供給状況</dt><dd data-market-preview="supplyStatus"></dd></div>
+                <div><dt>価格傾向</dt><dd data-market-preview="priceTrend"></dd></div>
+                <div><dt>信頼度</dt><dd data-market-preview="confidence"></dd></div>
+                <div><dt>情報源</dt><dd data-market-preview="sourceCount"></dd></div>
+              </dl>
+              <section class="market-research-preview-section">
+                <h4>市場コメント</h4>
+                <p data-market-preview="marketSummary"></p>
+              </section>
+              <section class="market-research-preview-section">
+                <h4>注意点</h4>
+                <ul data-market-preview-cautions></ul>
+              </section>
+              <details class="market-research-preview-section market-research-source-preview">
+                <summary>情報源を確認</summary>
+                <ul data-market-preview-sources></ul>
+              </details>
+              <div class="form-actions market-draft-apply-actions">
+                <button type="button" id="draftMarketResearchApplyButton" class="primary-button">フォームの下書きに反映する</button>
+                <button type="button" id="draftMarketResearchBackButton" class="secondary-button">貼り付けに戻る</button>
+              </div>
+            </section>
+          </section>
+
+          <aside id="marketDraftEditNotice" class="market-draft-edit-notice hidden">
+            <strong>既存商品の編集では、AI下書き作成は使わないニャ。</strong>
+            <p>相場調査を追加したい場合は、商品カード側の「AI相場調査JSONを取り込む」を使ってニャ。</p>
+          </aside>
+        </fieldset>
+
+        <fieldset class="wizard-step" data-wizard-step="3">
+          <legend class="wizard-step-title"><span class="wizard-step-tag">Q3</span>市場での状況</legend>
           <div class="form-grid">
             <label>
               <span>販売状態</span>
@@ -329,8 +418,8 @@
           </div>
         </fieldset>
 
-        <fieldset class="wizard-step" data-wizard-step="3">
-          <legend class="wizard-step-title"><span class="wizard-step-tag">Q3</span>価格のこと</legend>
+        <fieldset class="wizard-step" data-wizard-step="4">
+          <legend class="wizard-step-title"><span class="wizard-step-tag">Q4</span>価格のこと</legend>
           <div class="form-grid">
             <label>
               <span>価格基準</span>
@@ -360,8 +449,8 @@
           </div>
         </fieldset>
 
-        <fieldset class="wizard-step" data-wizard-step="4">
-          <legend class="wizard-step-title"><span class="wizard-step-tag">Q4</span>作戦のこと</legend>
+        <fieldset class="wizard-step" data-wizard-step="5">
+          <legend class="wizard-step-title"><span class="wizard-step-tag">Q5</span>作戦のこと</legend>
           <div class="form-grid">
             <label>
               <span>目標価格</span>
@@ -381,8 +470,8 @@
           </div>
         </fieldset>
 
-        <fieldset class="wizard-step score-section-accel" data-wizard-step="5">
-          <legend class="wizard-step-title"><span class="wizard-step-tag accel-tag">ACCEL</span>心のアクセル測定</legend>
+        <fieldset class="wizard-step score-section-accel" data-wizard-step="6">
+          <legend class="wizard-step-title"><span class="wizard-step-tag accel-tag">Q6</span>心のアクセル測定</legend>
           <div class="score-grid">
             <label>
               <span>欲しい度</span>
@@ -407,8 +496,8 @@
           </div>
         </fieldset>
 
-        <fieldset class="wizard-step score-section-brake" data-wizard-step="6">
-          <legend class="wizard-step-title"><span class="wizard-step-tag brake-tag">BRAKE</span>理性のブレーキ測定</legend>
+        <fieldset class="wizard-step score-section-brake" data-wizard-step="7">
+          <legend class="wizard-step-title"><span class="wizard-step-tag brake-tag">Q7</span>理性のブレーキ測定</legend>
           <div class="score-grid">
             <label>
               <span>置き場所危険度</span>
@@ -433,8 +522,8 @@
           </div>
         </fieldset>
 
-        <fieldset class="wizard-step" data-wizard-step="7">
-          <legend class="wizard-step-title"><span class="wizard-step-tag">Q7</span>最後にひとこと</legend>
+        <fieldset class="wizard-step" data-wizard-step="8">
+          <legend class="wizard-step-title"><span class="wizard-step-tag">Q8</span>最後にひとこと</legend>
           <label class="wide-label">
             <span>メモ</span>
             <textarea id="memoInput" rows="4" placeholder="欲しい理由、置き場所、迷っている点など"></textarea>

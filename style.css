@@ -1097,6 +1097,119 @@ p {
   line-height: 1.6;
 }
 
+/* ---------- AI相場調査の最新結果 ---------- */
+
+.market-research-card-summary {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 2px solid rgba(46, 143, 133, 0.42);
+  border-radius: var(--radius-small);
+  background: #eef7ed;
+  padding: 12px;
+}
+
+.market-research-card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.market-research-card-heading span {
+  color: var(--teal-deep);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.market-research-card-heading strong {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.market-research-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.market-research-card-grid div {
+  min-width: 0;
+  border: 1px solid rgba(46, 143, 133, 0.3);
+  border-radius: 7px;
+  background: rgba(255, 253, 244, 0.8);
+  padding: 8px 9px;
+}
+
+.market-research-card-grid span {
+  display: block;
+  color: var(--faint);
+  font-size: 0.66rem;
+}
+
+.market-research-card-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.market-research-card-summary > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+
+.market-research-history-box {
+  border-top: 1px dashed rgba(46, 143, 133, 0.4);
+  padding-top: 8px;
+}
+
+.market-research-history-box summary {
+  cursor: pointer;
+  color: var(--teal-deep);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.market-research-history-box ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.market-research-history-box li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  border-top: 1px solid rgba(46, 143, 133, 0.22);
+  padding-top: 6px;
+}
+
+.market-research-history-box li span,
+.market-research-history-box li small {
+  color: var(--faint);
+  font-size: 0.68rem;
+}
+
+.market-research-history-box li strong {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+
+.market-research-history-box li small {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- 相場をしらべる（AI偵察 / 登録URL / 通販検索） ---------- */
 
 .shop-links {
@@ -1105,6 +1218,13 @@ p {
   gap: 8px;
   padding-top: 10px;
   border-top: 1px dashed var(--line);
+}
+
+/* カードを閉じても、相場調査の導線は常に表示する。 */
+.item-card > .shop-links {
+  margin: 0 14px 14px 20px;
+  padding-top: 12px;
+  border-top: 2px dashed var(--line);
 }
 
 .shop-search-row {
@@ -1131,7 +1251,7 @@ p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: 44px;
   border: 2px solid var(--line);
   border-radius: 9px;
   background: var(--cream);
@@ -1198,6 +1318,19 @@ p {
   box-shadow: 0 1px 0 var(--outline), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
+.shop-market-import {
+  width: 100%;
+  border-color: rgba(183, 134, 44, 0.65);
+  background: #fbf1d7;
+  color: #74571b;
+}
+
+.shop-market-import:hover,
+.shop-market-import:focus-visible {
+  border-color: var(--mustard-deep);
+  background: #fff5d7;
+}
+
 /* ---------- AI偵察 確認モーダル ---------- */
 
 .ai-research-note {
@@ -1233,6 +1366,176 @@ p {
   border-top: 1px dashed var(--line);
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.ai-research-memo-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.ai-research-memo-option input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.ai-research-preview-label {
+  display: block;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.ai-research-preview {
+  width: 100%;
+  min-height: 190px;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.ai-research-dialog .form-actions button {
+  flex: 1 1 190px;
+}
+
+/* ---------- AI相場調査JSON取り込み ---------- */
+
+.market-research-import-dialog {
+  width: min(820px, 100%);
+}
+
+.market-research-import-dialog [hidden] {
+  display: none !important;
+}
+
+.market-research-import-dialog .section-title strong {
+  overflow-wrap: anywhere;
+}
+
+.market-research-import-label {
+  margin-top: 12px;
+}
+
+.market-research-import-label small {
+  line-height: 1.6;
+}
+
+.market-research-import-textarea {
+  min-height: 250px;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.market-research-import-errors,
+.market-research-import-warnings {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+  border: 2px solid;
+  border-radius: var(--radius-small);
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+
+.market-research-import-errors {
+  border-color: rgba(207, 82, 64, 0.55);
+  background: #fbeae4;
+  color: var(--red-deep);
+}
+
+.market-research-import-warnings {
+  border-color: rgba(183, 134, 44, 0.55);
+  background: #fbf1d7;
+  color: #6c511a;
+}
+
+.market-research-import-errors ul,
+.market-research-import-warnings ul {
+  margin: 0;
+  padding-left: 1.3em;
+}
+
+.market-research-import-actions button {
+  flex: 1 1 180px;
+}
+
+.market-research-preview-title {
+  margin: 14px 0 8px;
+  color: var(--teal-deep);
+  font-size: 1rem;
+}
+
+.market-research-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.market-research-preview-grid div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--cream);
+  padding: 9px 10px;
+}
+
+.market-research-preview-grid dt {
+  color: var(--faint);
+  font-size: 0.68rem;
+}
+
+.market-research-preview-grid dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.market-research-preview-section {
+  min-width: 0;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: #fffdf4;
+  padding: 10px 12px;
+}
+
+.market-research-preview-section h4,
+.market-research-preview-section summary {
+  margin: 0;
+  color: var(--teal-deep);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.market-research-preview-section p,
+.market-research-preview-section ul {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.market-research-preview-section ul {
+  padding-left: 1.3em;
+}
+
+.market-research-source-preview summary {
+  cursor: pointer;
 }
 
 /* ---------- AI偵察トースト ---------- */
@@ -1715,6 +2018,134 @@ fieldset.wizard-step {
   border-radius: var(--radius);
   background: var(--panel-2);
   padding: 14px 16px 16px;
+}
+
+.market-draft-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.market-draft-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 10px;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--cream);
+  padding: 14px;
+}
+
+.market-draft-choice-ai {
+  border-color: rgba(46, 143, 133, 0.55);
+  background: #eef7ed;
+}
+
+.market-draft-choice-icon {
+  grid-row: 1 / span 2;
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.market-draft-choice h3 {
+  margin: 0 0 5px;
+  color: var(--teal-deep);
+  font-size: 0.92rem;
+}
+
+.market-draft-choice p:not(.market-draft-choice-icon),
+.market-draft-choice small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.65;
+}
+
+.market-draft-choice small {
+  display: block;
+  margin-top: 5px;
+}
+
+.market-draft-choice button {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.market-draft-ai-panel {
+  margin-top: 14px;
+  min-width: 0;
+  border: 2px solid rgba(46, 143, 133, 0.48);
+  border-radius: var(--radius);
+  background: #f2f8ee;
+  padding: 14px;
+}
+
+.market-draft-ai-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.market-draft-ai-heading h3 {
+  margin: 0;
+  color: var(--teal-deep);
+  font-size: 1rem;
+}
+
+.market-draft-ai-panel > p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.market-draft-pending-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--teal-deep);
+  border-radius: 999px;
+  background: #dff0e0;
+  color: var(--teal-deep);
+  padding: 4px 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.market-draft-textarea {
+  min-height: 190px;
+}
+
+.market-draft-prompt-actions,
+.market-draft-review-actions,
+.market-draft-apply-actions {
+  margin-top: 12px;
+}
+
+.market-draft-preview {
+  margin-top: 14px;
+  border-top: 2px dashed rgba(46, 143, 133, 0.42);
+  padding-top: 4px;
+}
+
+.market-draft-edit-notice {
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-small);
+  background: #f7efdb;
+  padding: 14px;
+}
+
+.market-draft-edit-notice strong {
+  color: var(--red-deep);
+  font-size: 0.86rem;
+}
+
+.market-draft-edit-notice p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.65;
 }
 
 .wizard-step-hidden {
@@ -2503,6 +2934,29 @@ fieldset.wizard-step {
     flex: 1 1 auto;
   }
 
+  .item-card > .shop-links {
+    margin: 0 12px 14px 18px;
+  }
+
+  .shop-search-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shop-search-row .pr-chip {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .shop-search-row .shop-link-button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .shop-search-row .shop-kakaku {
+    grid-column: 1 / -1;
+  }
+
   .usher-console {
     gap: 10px;
   }
@@ -2526,6 +2980,36 @@ fieldset.wizard-step {
   .wizard-nav {
     display: grid;
     grid-template-columns: 1fr 1.6fr;
+  }
+
+  .market-draft-choice-grid,
+  .market-research-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .market-draft-ai-panel {
+    padding: 12px;
+  }
+
+  .market-draft-ai-heading {
+    display: grid;
+  }
+
+  .market-draft-pending-badge {
+    justify-self: start;
+  }
+
+  .market-draft-prompt-actions,
+  .market-draft-review-actions,
+  .market-draft-apply-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .market-draft-prompt-actions button,
+  .market-draft-review-actions button,
+  .market-draft-apply-actions button {
+    width: 100%;
   }
 
   .review-presentation-dialog {
@@ -2560,6 +3044,32 @@ fieldset.wizard-step {
 
   .purchase-dialog .primary-button,
   .purchase-dialog .secondary-button {
+    width: 100%;
+  }
+
+  .ai-research-dialog .form-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .ai-research-dialog .form-actions button {
+    width: 100%;
+  }
+
+  .market-research-import-dialog {
+    padding: 16px;
+  }
+
+  .market-research-import-textarea {
+    min-height: 220px;
+  }
+
+  .market-research-import-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .market-research-import-actions button {
     width: 100%;
   }
 
